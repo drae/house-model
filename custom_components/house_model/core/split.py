@@ -18,7 +18,9 @@ SHOWER = dict(rise=5, within=300, settle=300, drop=3)
 HOB = dict(rise=6, within=900, settle=300, drop=3)
 HOB_AFTER_SHOWER = 1800  # bathroom steam reaching the kitchen is not cooking
 OVEN_KW = 1.5            # an electric load above this for most of a kitchen event = oven, not hob
-MIN_EVENT = 180
+MIN_EVENT = 180          # shortest hob session, and the shortest event rates are learned from
+MIN_SHOWER = 60          # brief hot-water draws in a shower room still claim their share of a slot
+MAX_KW = {'dhw': 35.0, 'hob': 3.0}  # evidence above these is something else (a domestic burner tops out ~3 kW)
 
 # Priors (kW) and their weight in hours of evidence
 PRIOR_KW = {'heat': (17.0, 1.0), 'dhw': (14.0, 0.25), 'hob': (1.3, 0.3)}
@@ -45,7 +47,7 @@ class Slot:
 
 
 def detect(samples: list[tuple[float, float]], kind: str, rise: float, within: float, settle: float,
-           drop: float) -> list[Event]:
+           drop: float, min_len: float = MIN_EVENT) -> list[Event]:
     """Humidity rises fast enough to be a shower or cooking."""
     times = [t for t, _ in samples]
     out, ev, floor = [], None, float('-inf')
@@ -72,11 +74,11 @@ def detect(samples: list[tuple[float, float]], kind: str, rise: float, within: f
     if ev is not None:
         ev.end = peak_t
         out.append(ev)
-    return [e for e in out if e.end - e.start >= MIN_EVENT]
+    return [e for e in out if e.end - e.start >= min_len]
 
 
 def events(showers: list[list], hobs: list[list], power: list[tuple[float, float]] | None) -> list[Event]:
-    evs = [e for s in showers for e in detect(s, 'shower', **SHOWER)]
+    evs = [e for s in showers for e in detect(s, 'shower', **SHOWER, min_len=MIN_SHOWER)]
     for s in hobs:
         for e in detect(s, 'hob', **HOB):
             if any(0 <= e.start - x.end <= HOB_AFTER_SHOWER or x.start <= e.start <= x.end
@@ -209,6 +211,8 @@ def evidence(slots: dict[float, Slot], evs: list[Event], tz: ZoneInfo) -> dict[d
         if not s.lumped and s.heat >= 300 and s.shower == 0 and s.hob == 0 and s.gas > 0:
             add(s.start, 'heat', s.gas, s.heat / 3600)
     for e in evs:
+        if e.end - e.start < MIN_EVENT:
+            continue
         ks = [k for k in slots if k < e.end and k + SLOT > e.start]
         # the slot after the event may hold the tail
         nxt = int(e.end // SLOT) * SLOT + SLOT
@@ -220,9 +224,10 @@ def evidence(slots: dict[float, Slot], evs: list[Event], tz: ZoneInfo) -> dict[d
         other = 'hob' if e.kind == 'shower' else 'shower'
         if any(getattr(g, other) > 0 for g in group):
             continue
-        g = sum(x.gas for x in group)
-        if g > 0:
-            add(e.start, 'dhw' if e.kind == 'shower' else 'hob', g, (e.end - e.start) / 3600)
+        g, h = sum(x.gas for x in group), (e.end - e.start) / 3600
+        key = 'dhw' if e.kind == 'shower' else 'hob'
+        if 0 < g <= MAX_KW[key] * h:
+            add(e.start, key, g, h)
     return out
 
 

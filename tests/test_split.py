@@ -80,3 +80,16 @@ def test_heating_during_shower_counts_as_hot_water():
     assert s.heat == 1200 and s.shower == 600
     parts = split.split_slot(s, KW)
     assert parts['hot_water'] == pytest.approx(7.0 * 14 * 600 / (14 * 600 + 17 * 1200))
+
+
+def test_brief_bathroom_draw_shares_a_slot_with_the_hob():
+    t = ts('2026-10-19T14:30')
+    bath = [(t, 54.0), (t + 60, 56.0), (t + 100, 58.0), (t + 140, 60.0), (t + 400, 59.0), (t + 500, 56.0)]
+    evs = split.events([bath], [], None)
+    assert [(e.kind, e.end - e.start) for e in evs] == [('shower', 80.0)]
+    hob = split.Event('hob', t + 300, t + 1500, 7)
+    slots = split.build_slots(t, t + 1800, [(t, 0.0), (t + 1820, 1.0)], [(t, 'idle', 'none')], evs + [hob], KW)
+    parts = split.split_slot(slots[t], KW)
+    assert parts['hot_water'] > 0.4 and parts['hob'] < 0.6
+    # too short to learn a rate from; and a 4 kW "hob" is not learned either
+    assert split.evidence(slots, evs + [hob], TZ) == {}

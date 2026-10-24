@@ -9,7 +9,7 @@ from homeassistant.components.recorder import get_instance, history
 from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
@@ -73,6 +73,9 @@ class HouseModelCoordinator(DataUpdateCoordinator[dict]):
             t = nxt
         self._off_since = now
 
+    async def _retry(self, _now) -> None:
+        await self.async_request_refresh()
+
     async def _forecast_temps(self, tz: ZoneInfo) -> dict[dt.date, float]:
         entity = self.conf[CONF_WEATHER]
         try:
@@ -104,6 +107,9 @@ class HouseModelCoordinator(DataUpdateCoordinator[dict]):
         stats = await get_instance(self.hass).async_add_executor_job(
             statistics_during_period, self.hass, start, None, ids, 'hour', None, {'sum', 'mean', 'max'})
         fc = await self._forecast_temps(tz)
+        if not fc:
+            # the weather entity is often not ready yet just after Home Assistant starts
+            async_call_later(self.hass, 300, self._retry)
         self._prune(today)
         away = {dt.date.fromisoformat(k): v for k, v in self.saved['away'].items()}
         hist = None
