@@ -1,0 +1,15 @@
+{
+  "domain": "house_model",
+  "name": "House model",
+  "after_dependencies": ["climate", "weather"],
+  "codeowners": ["@drae"],
+  "config_flow": true,
+  "dependencies": ["recorder"],
+  "documentation": "https://github.com/drae/house-model",
+  "integration_type": "service",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/drae/house-model/issues",
+  "requirements": ["numpy>=1.26"],
+  "single_config_entry": true,
+  "version": "0.1.0"
+}

@@ -1,0 +1,36 @@
+{
+  "config": {
+    "abort": {
+      "single_instance_allowed": "House model is already set up."
+    },
+    "step": {
+      "user": {
+        "title": "House model",
+        "description": "Pick the sensors the gas forecast learns from.",
+        "data": {
+          "gas_energy": "Gas energy (kWh, cumulative)",
+          "outdoor_temperature": "Outdoor temperature",
+          "outdoor_temperature_fallback": "Outdoor temperature fallback",
+          "heating_time": "Heating time today (hours, resets at midnight)",
+          "climate": "Thermostat",
+          "weather": "Weather forecast"
+        },
+        "data_description": {
+          "outdoor_temperature_fallback": "Used for days the main sensor has no statistics.",
+          "heating_time": "Cold days with no heating at all are left out of the fit.",
+          "climate": "Days with the thermostat off for 6 hours or more are left out of the fit."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "gas_forecast_today": {
+        "name": "Gas forecast today"
+      },
+      "gas_forecast_error": {
+        "name": "Gas forecast error"
+      }
+    }
+  }
+}
