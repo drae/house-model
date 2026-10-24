@@ -22,6 +22,13 @@ MIN_EVENT = 180          # shortest hob session, and the shortest event rates ar
 MIN_SHOWER = 60          # brief hot-water draws in a shower room still claim their share of a slot
 MAX_KW = {'dhw': 35.0, 'hob': 3.0}  # evidence above these is something else (a domestic burner tops out ~3 kW)
 
+# Pans filled from the kettle: a short burst (5-minute max >= 2.5 kW for at most two buckets, then the load
+# drops) with the boiler idle stands in for a hob session when the kitchen humidity shows none.
+KETTLE_KW = 2.5
+KETTLE_BUCKETS = 2
+KETTLE_AFTER_KW = 0.8
+KETTLE_HOB = 1200
+
 # Priors (kW) and their weight in hours of evidence
 PRIOR_KW = {'heat': (17.0, 1.0), 'dhw': (14.0, 0.25), 'hob': (1.3, 0.3)}
 
@@ -32,6 +39,7 @@ class Event:
     start: float
     end: float
     rise: float
+    inferred: bool = False  # from a kettle cue: the timing is a guess, so no rates are learned from it
 
 
 @dataclass
@@ -77,18 +85,45 @@ def detect(samples: list[tuple[float, float]], kind: str, rise: float, within: f
     return [e for e in out if e.end - e.start >= min_len]
 
 
-def events(showers: list[list], hobs: list[list], power: list[tuple[float, float]] | None) -> list[Event]:
+def kettles(power: list[tuple]) -> list[tuple[float, float]]:
+    """Short high bursts in 5-minute (start, mean, max) buckets: a kettle, not an oven."""
+    rows = sorted(p for p in power if len(p) > 2 and p[2] is not None)
+    out, run = [], []
+    for i, (t, m, mx) in enumerate(rows):
+        if mx >= KETTLE_KW and (not run or t - run[-1][0] <= 300):
+            run.append((t, m, mx))
+            continue
+        if run:
+            if len(run) <= KETTLE_BUCKETS and (t - run[-1][0] > 300 or m < KETTLE_AFTER_KW):
+                out.append((run[0][0], run[-1][0] + 300))
+            run = [(t, m, mx)] if mx >= KETTLE_KW else []
+    if run and len(run) <= KETTLE_BUCKETS:
+        out.append((run[0][0], run[-1][0] + 300))
+    return out
+
+
+def events(showers: list[list], hobs: list[list], power: list[tuple] | None,
+           climate: list[tuple[float, str, str]] | None = None) -> list[Event]:
     evs = [e for s in showers for e in detect(s, 'shower', **SHOWER, min_len=MIN_SHOWER)]
+    after_shower = lambda t: any(0 <= t - x.end <= HOB_AFTER_SHOWER or x.start <= t <= x.end
+                                 for x in evs if x.kind == 'shower')
     for s in hobs:
         for e in detect(s, 'hob', **HOB):
-            if any(0 <= e.start - x.end <= HOB_AFTER_SHOWER or x.start <= e.start <= x.end
-                   for x in evs if x.kind == 'shower'):
+            if after_shower(e.start):
                 continue
             if power:
-                inside = [m for t, m in power if e.start - 300 < t < e.end]
+                inside = [p[1] for p in power if e.start - 300 < p[0] < e.end]
                 if inside and sum(m > OVEN_KW for m in inside) > len(inside) / 2:
                     continue
             evs.append(e)
+    if power and hobs:
+        heat = _intervals([(t, a == 'heating') for t, a, _ in climate], float('-inf'), float('inf')) if climate else []
+        for ks, ke in kettles(power):
+            if after_shower(ke) or any(ks - 600 <= e.start <= ke + KETTLE_HOB for e in evs if e.kind == 'hob'):
+                continue
+            if any(a < ke + KETTLE_HOB and b > ks for a, b in heat):
+                continue
+            evs.append(Event('hob', ke, ke + KETTLE_HOB, 0.0, inferred=True))
     return sorted(evs, key=lambda e: e.start)
 
 
@@ -211,7 +246,7 @@ def evidence(slots: dict[float, Slot], evs: list[Event], tz: ZoneInfo) -> dict[d
         if not s.lumped and s.heat >= 300 and s.shower == 0 and s.hob == 0 and s.gas > 0:
             add(s.start, 'heat', s.gas, s.heat / 3600)
     for e in evs:
-        if e.end - e.start < MIN_EVENT:
+        if e.inferred or e.end - e.start < MIN_EVENT:
             continue
         ks = [k for k in slots if k < e.end and k + SLOT > e.start]
         # the slot after the event may hold the tail

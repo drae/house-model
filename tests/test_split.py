@@ -25,17 +25,17 @@ def test_hob_detected_through_a_kettle():
 
 
 def test_kettle_steam_and_shower_drift_are_not_hob():
-    evs = split.events([BATHROOM_24], [KITCHEN_24], POWER_24)
+    evs = split.events([BATHROOM_24], [KITCHEN_24], POWER_24, CLIMATE_24)
     assert [e.kind for e in evs] == ['shower']
 
 
 def test_oven_is_not_hob():
-    oven = [(t, 2.5) for t, _ in POWER_22]
+    oven = [(t, 2.5, 3.0) for t, *_ in POWER_22]
     assert split.events([], [KITCHEN_22], oven) == []
 
 
 def test_evening_24_split():
-    evs = split.events([BATHROOM_24], [KITCHEN_24], POWER_24)
+    evs = split.events([BATHROOM_24], [KITCHEN_24], POWER_24, CLIMATE_24)
     slots = split.build_slots(ts('2026-10-24T16:30'), ts('2026-10-25T00:30'), GAS_24, CLIMATE_24, evs, KW)
     s17, s19 = slots[ts('2026-10-24T17:00')], slots[ts('2026-10-24T19:00')]
     assert s17.gas == pytest.approx(5.492) and s19.gas == pytest.approx(5.136)
@@ -53,7 +53,7 @@ def test_evening_24_split():
 
 
 def test_learned_rates_from_the_two_evenings():
-    evs = split.events([BATHROOM_24], [KITCHEN_24], POWER_24)
+    evs = split.events([BATHROOM_24], [KITCHEN_24], POWER_24, CLIMATE_24)
     s24 = split.build_slots(ts('2026-10-24T16:30'), ts('2026-10-25T00:30'), GAS_24, CLIMATE_24, evs, KW)
     ev22 = split.events([], [KITCHEN_22], POWER_22)
     s22 = split.build_slots(ts('2026-10-22T19:00'), ts('2026-10-22T21:00'), GAS_22, [(ts('2026-10-22T19:00'), 'idle', 'none')], ev22, KW)
@@ -93,3 +93,29 @@ def test_brief_bathroom_draw_shares_a_slot_with_the_hob():
     assert parts['hot_water'] > 0.4 and parts['hob'] < 0.6
     # too short to learn a rate from; and a 4 kW "hob" is not learned either
     assert split.evidence(slots, evs + [hob], TZ) == {}
+
+
+def test_kettle_bursts_but_not_the_oven():
+    from fixtures_evenings import POWER_21, POWER_23
+    assert split.kettles(POWER_23) == [(ts('2026-10-23T19:25'), ts('2026-10-23T19:35'))]
+    assert split.kettles(POWER_22) == [(ts('2026-10-22T20:00'), ts('2026-10-22T20:10'))]
+    assert split.kettles(POWER_21) == []
+
+
+def test_pasta_without_steam_found_from_the_kettle():
+    from fixtures_evenings import CLIMATE_23, GAS_23, KITCHEN_23, POWER_23
+    evs = split.events([], [KITCHEN_23], POWER_23, CLIMATE_23)
+    assert [(e.kind, e.inferred, e.start) for e in evs] == [('hob', True, ts('2026-10-23T19:35'))]
+    slots = split.build_slots(ts('2026-10-23T18:00'), ts('2026-10-23T20:30'), GAS_23, CLIMATE_23, evs, KW)
+    day = split.daily(slots, KW, TZ)[dt.date(2026, 10, 23)]
+    assert day['hob'] == pytest.approx(0.436, abs=1e-3)
+    assert day['hot_water'] == pytest.approx(0.045, abs=1e-3)
+    assert split.evidence(slots, evs, TZ) == {}  # guessed timing: no rate learned
+
+
+def test_kettle_cue_skipped_when_steam_heating_or_a_shower_explain_it():
+    # 22 Oct: humidity already shows the hob
+    assert [e.inferred for e in split.events([], [KITCHEN_22], POWER_22)] == [False]
+    # 24 Oct: 19:05 kettle during heating, 23:45 kettle after the shower
+    evs = split.events([BATHROOM_24], [KITCHEN_24], POWER_24, CLIMATE_24)
+    assert [e.kind for e in evs] == ['shower']

@@ -48,6 +48,7 @@ Smart meters book gas in half-hour slots, a few seconds after each one ends. A c
 | Heating | the thermostat's `hvac_action` is `heating` (outside showers: a combi serves hot water first) |
 | Hot water | a fast humidity rise in a shower room: 5 points within 5 minutes, until the peak |
 | Hob | a fast humidity rise in the kitchen: 6 points within 15 minutes. Not counted within 30 minutes of a shower (steam drifting) or when the electricity load stays above 1.5 kW for most of it (an electric oven) |
+| Hob, from the kettle | pans filled from the kettle: a short burst (5-minute max of 2.5 kW or more for up to 10 minutes, then the load drops) with the boiler idle, no shower in the last 30 minutes and no humidity-detected hob. The next 20 minutes count as a hob session. No rates are learned from these, since the timing is a guess |
 | Anything else | gas with nothing seen counts as hot water (hot taps) |
 
 When a slot holds more than one use, its gas is shared in proportion to each one's time multiplied by its rate (kW).

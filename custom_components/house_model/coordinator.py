@@ -37,6 +37,7 @@ class HouseModelCoordinator(DataUpdateCoordinator[dict]):
         self._off_since: dt.datetime | None = None
         self._unsub = None
         self._last_fc: dict[dt.date, float] = {}
+        self._retry_unsub = None
 
     async def async_load(self) -> None:
         if stored := await self._store.async_load():
@@ -51,6 +52,9 @@ class HouseModelCoordinator(DataUpdateCoordinator[dict]):
         self._flush_off(dt_util.now())
         if self._unsub:
             self._unsub()
+        if self._retry_unsub:
+            self._retry_unsub()
+            self._retry_unsub = None
         await self._store.async_save(self.saved)
 
     @callback
@@ -74,6 +78,7 @@ class HouseModelCoordinator(DataUpdateCoordinator[dict]):
         self._off_since = now
 
     async def _retry(self, _now) -> None:
+        self._retry_unsub = None
         await self.async_request_refresh()
 
     async def _forecast_temps(self, tz: ZoneInfo) -> dict[dt.date, float]:
@@ -107,9 +112,9 @@ class HouseModelCoordinator(DataUpdateCoordinator[dict]):
         stats = await get_instance(self.hass).async_add_executor_job(
             statistics_during_period, self.hass, start, None, ids, 'hour', None, {'sum', 'mean', 'max'})
         fc = await self._forecast_temps(tz)
-        if not fc:
+        if not fc and self._retry_unsub is None:
             # the weather entity is often not ready yet just after Home Assistant starts
-            async_call_later(self.hass, 300, self._retry)
+            self._retry_unsub = async_call_later(self.hass, 300, self._retry)
         self._prune(today)
         away = {dt.date.fromisoformat(k): v for k, v in self.saved['away'].items()}
         hist = None
@@ -146,8 +151,10 @@ class HouseModelCoordinator(DataUpdateCoordinator[dict]):
                    for st in clim.get(self.conf[CONF_CLIMATE], []) if st.state not in ('unavailable', 'unknown')]
         power = None
         if self.conf.get(CONF_POWER):
-            rows = statistics_during_period(self.hass, start, None, {self.conf[CONF_POWER]}, '5minute', None, {'mean'})
-            power = [(r['start'], r['mean']) for r in rows.get(self.conf[CONF_POWER], []) if r.get('mean') is not None]
+            rows = statistics_during_period(self.hass, start, None, {self.conf[CONF_POWER]}, '5minute', None,
+                                            {'mean', 'max'})
+            power = [(r['start'], r['mean'], r.get('max')) for r in rows.get(self.conf[CONF_POWER], [])
+                     if r.get('mean') is not None]
         return {
             'start': start.timestamp(),
             'gas': numeric(num.get(self.conf[CONF_GAS], [])),
@@ -159,7 +166,7 @@ class HouseModelCoordinator(DataUpdateCoordinator[dict]):
 
     def _split(self, hist: dict, lts_gas: dict, tz: ZoneInfo, today: dt.date, now: dt.datetime) -> dict:
         """Recompute the split for the fetched window and store finished days."""
-        evs = split.events(hist['shower'], hist['hob'], hist['power'])
+        evs = split.events(hist['shower'], hist['hob'], hist['power'], hist['climate'])
         first = dt.datetime.fromtimestamp(hist['start'], tz).date()
         old = [v for d, v in self.saved['evidence'].items()
                if d < first.isoformat() and d >= (today - dt.timedelta(days=EVIDENCE_DAYS)).isoformat()]
