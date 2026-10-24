@@ -28,6 +28,7 @@ KETTLE_KW = 2.5
 KETTLE_BUCKETS = 2
 KETTLE_AFTER_KW = 0.8
 KETTLE_HOB = 1200
+KETTLE_GAS = 0.1  # the slot after the kettle must have its own reading of at least this, unexplained
 
 # Priors (kW) and their weight in hours of evidence
 PRIOR_KW = {'heat': (17.0, 1.0), 'dhw': (14.0, 0.25), 'hob': (1.3, 0.3)}
@@ -195,12 +196,14 @@ def build_slots(t0: float, t1: float, gas: list[tuple[float, float]], climate: l
     for a, b in _overlap(_minus(heat, showers), boost):
         _add(slots, a, b, 'boost_heat')
     for e in evs:
-        _add(slots, e.start, e.end, e.kind)
+        if not e.inferred:
+            _add(slots, e.start, e.end, e.kind)
 
     def expected(s: Slot) -> float:
         return (kw['heat'] * s.heat + kw['dhw'] * s.shower + kw['hob'] * s.hob) / 3600
 
     # Each reading books the slots since the previous reading; zero-gas slots produce no reading
+    single = set()
     for (p, v0), (u, v1) in zip(gas, gas[1:]):
         delta = v1 - v0
         if delta <= 0:
@@ -208,6 +211,8 @@ def build_slots(t0: float, t1: float, gas: list[tuple[float, float]], climate: l
         covered = [k for k in range(int(p // SLOT) * SLOT, int(u // SLOT) * SLOT, SLOT) if k in slots]
         if not covered:
             continue
+        if len(covered) == 1:
+            single.add(covered[0])
         w = [expected(slots[k]) for k in covered]
         if sum(w) > 0:
             for k, wk in zip(covered, w):
@@ -219,6 +224,15 @@ def build_slots(t0: float, t1: float, gas: list[tuple[float, float]], climate: l
         if lumped:
             for k in covered:
                 slots[k].lumped = True
+
+    # A kettle cue claims only gas booked for its own slot with nothing else to explain it
+    for e in evs:
+        if not e.inferred:
+            continue
+        for k in range(int(e.start // SLOT) * SLOT, int(e.end), SLOT):
+            s = slots.get(k)
+            if s and k in single and s.gas >= KETTLE_GAS and s.heat == 0 and s.shower == 0 and s.hob == 0:
+                s.hob = min(e.end, k + SLOT) - max(e.start, k)
     return slots
 
 

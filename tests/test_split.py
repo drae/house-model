@@ -119,3 +119,18 @@ def test_kettle_cue_skipped_when_steam_heating_or_a_shower_explain_it():
     # 24 Oct: 19:05 kettle during heating, 23:45 kettle after the shower
     evs = split.events([BATHROOM_24], [KITCHEN_24], POWER_24, CLIMATE_24)
     assert [e.kind for e in evs] == ['shower']
+
+
+def test_tea_kettle_without_its_own_gas_is_not_hob():
+    t = ts('2026-10-16T15:00')
+    power = [(t, 0.3, 0.4), (t + 300, 1.2, 3.0), (t + 600, 0.3, 0.4)]
+    evs = split.events([], [[(t, 55.0)]], power, [(t - 3600, 'idle', 'none')])
+    assert [e.inferred for e in evs] == [True]
+    # no reading after the kettle: nothing to claim
+    slots = split.build_slots(t, t + 3600, [(t, 0.0)], [(t, 'idle', 'none')], evs, KW)
+    assert all(s.hob == 0 for s in slots.values())
+    # a late reading lumping several slots (a hot tap hours earlier) is not claimed either
+    gas = [(t - 3 * 3600, 0.0), (t + 1820, 0.6)]
+    slots = split.build_slots(t - 3 * 3600, t + 3600, gas, [(t - 3 * 3600, 'idle', 'none')], evs, KW)
+    assert all(s.hob == 0 for s in slots.values())
+    assert split.daily(slots, KW, TZ)[dt.date(2026, 10, 16)]['hot_water'] == pytest.approx(0.6)
