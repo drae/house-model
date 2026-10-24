@@ -30,7 +30,7 @@ def _wls(X, y, w, prior_mean=None, prior_sd=None):
 
 @dataclass
 class Model:
-    """gas = a + b * max(0, base - t2)."""
+    """gas = a + b * max(0, base - t2), plus a fixed offset (the non-heating gas, for heating-only fits)."""
 
     base: float = 15.0
     fit_base: bool = False          # change-point: choose the base by least squares
@@ -41,6 +41,7 @@ class Model:
     a: float = 0.0
     b: float = 0.0
     days: int = 0
+    offset: float = 0.0
 
     def fit(self, days: list[Day]) -> bool:
         days = [d for d in days if d.gas is not None and (self.window is None or d.age <= self.window)]
@@ -66,4 +67,4 @@ class Model:
         return True
 
     def predict(self, t2: float) -> float:
-        return max(0.0, self.a + self.b * max(0.0, self.base - t2))
+        return max(0.0, self.a + self.b * max(0.0, self.base - t2)) + self.offset

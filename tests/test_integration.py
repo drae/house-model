@@ -99,7 +99,7 @@ async def test_setup_forecasts_and_scores(hass: HomeAssistant):
 
     err = hass.states.get('sensor.house_model_gas_forecast_error')
     assert float(err.state) < 0.5
-    assert set(err.attributes['models']) == {'ols15', 'change_point', 'bayes'}
+    assert set(err.attributes['models']) == {'ols15', 'change_point', 'bayes', 'bayes_heating'}
 
     # Away tracking: off then back on accumulates minutes for today
     coordinator = entry.runtime_data
@@ -108,6 +108,57 @@ async def test_setup_forecasts_and_scores(hass: HomeAssistant):
     coordinator._off_since -= dt.timedelta(minutes=30)
     hass.states.async_set('climate.thermostat', 'heat')
     await hass.async_block_till_done()
-    assert coordinator.saved['away'][dt_util.now().date().isoformat()] == pytest.approx(30, abs=1)
+    # summed: just after midnight the 30 minutes are split across two days
+    assert sum(coordinator.saved['away'].values()) == pytest.approx(30, abs=1)
 
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+def _shifted_evening():
+    """The real 24 Oct evening moved to end an hour before now, in whole half-hours."""
+    from fixtures_evenings import BATHROOM_24, CLIMATE_24, GAS_24, KITCHEN_24, POWER_24, ts
+    off = (dt_util.utcnow().timestamp() - 3600 - ts('2026-10-25T00:30')) // 1800 * 1800
+    sh = lambda rows: [(t + off, *rest) for t, *rest in rows]
+    return {'start': ts('2026-10-24T16:30') + off, 'gas': sh(GAS_24), 'shower': [sh(BATHROOM_24)],
+            'hob': [sh(KITCHEN_24)], 'climate': sh(CLIMATE_24), 'power': sh(POWER_24)}
+
+
+async def test_gas_split_on_a_real_evening(hass: HomeAssistant):
+    await hass.config.async_update(time_zone='Europe/London')
+    await _weather(hass)
+    hass.states.async_set('climate.thermostat', 'auto')
+    conf = {**CONF, 'shower_humidity': ['sensor.bathroom_humidity'], 'hob_humidity': ['sensor.kitchen_humidity'],
+            'electricity_power': 'sensor.power'}
+    entry = MockConfigEntry(domain=DOMAIN, data=conf)
+    entry.add_to_hass(hass)
+    with patch('custom_components.house_model.coordinator.statistics_during_period', side_effect=synthetic), \
+            patch('custom_components.house_model.coordinator.HouseModelCoordinator._history',
+                  side_effect=lambda start: _shifted_evening()):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    for use in ('heating', 'hot_water', 'hob'):
+        st = hass.states.get(f'sensor.house_model_gas_{use}_today')
+        assert st is not None and st.attributes['device_class'] == 'energy'
+    days = entry.runtime_data.saved['split'].values()
+    assert sum(d['hot_water'] for d in days) == pytest.approx(4.019, abs=1e-3)
+    assert sum(d['heating'] for d in days) == pytest.approx(5.492 + 5.136, abs=1e-3)
+    assert sum(d['hob'] for d in days) == 0
+    assert sum(d['boost_heating'] for d in days) == pytest.approx(5.136, abs=1e-3)
+    kw = hass.states.get('sensor.house_model_gas_heating_today').attributes['kw']
+    assert 14 < kw['dhw'] < 15 and 17 < kw['heat'] < 18
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_options_flow_adds_split_sensors(hass: HomeAssistant):
+    entry = MockConfigEntry(domain=DOMAIN, data=CONF)
+    entry.add_to_hass(hass)
+    with patch('custom_components.house_model.async_setup_entry', return_value=True), \
+            patch('custom_components.house_model.async_unload_entry', return_value=True):
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        assert result['type'] is FlowResultType.FORM
+        result = await hass.config_entries.options.async_configure(
+            result['flow_id'], {**CONF, 'shower_humidity': ['sensor.bathroom_humidity']})
+        assert result['type'] is FlowResultType.CREATE_ENTRY
+        assert entry.options['shower_humidity'] == ['sensor.bathroom_humidity']
+        await hass.config_entries.async_remove(entry.entry_id)

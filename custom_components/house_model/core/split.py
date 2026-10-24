@@ -1,0 +1,260 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Paul Owen
+"""Split metered gas into heating, hot water and hob, per 30-minute meter slot.
+
+Inputs are state histories: the cumulative gas meter, the thermostat's hvac_action/preset_mode,
+humidity in hot-water rooms (showers) and the kitchen (hob), and optionally 5-minute electricity means.
+"""
+import bisect
+import datetime as dt
+from dataclasses import dataclass, field
+from zoneinfo import ZoneInfo
+
+SLOT = 1800  # the meter books gas in half hours, a few seconds after each one ends
+
+# Event detection: a rise of `rise` points within `within` seconds starts an event; it ends at the peak
+# once the value has not beaten it for `settle` seconds or has dropped `drop` points.
+SHOWER = dict(rise=5, within=300, settle=300, drop=3)
+HOB = dict(rise=6, within=900, settle=300, drop=3)
+HOB_AFTER_SHOWER = 1800  # bathroom steam reaching the kitchen is not cooking
+OVEN_KW = 1.5            # an electric load above this for most of a kitchen event = oven, not hob
+MIN_EVENT = 180
+
+# Priors (kW) and their weight in hours of evidence
+PRIOR_KW = {'heat': (17.0, 1.0), 'dhw': (14.0, 0.25), 'hob': (1.3, 0.3)}
+
+
+@dataclass
+class Event:
+    kind: str    # 'shower' or 'hob'
+    start: float
+    end: float
+    rise: float
+
+
+@dataclass
+class Slot:
+    start: float             # UTC timestamp
+    gas: float = 0.0
+    heat: float = 0.0        # seconds calling for heat outside showers (a combi serves hot water first)
+    boost_heat: float = 0.0  # of which with boost on
+    shower: float = 0.0
+    hob: float = 0.0
+    lumped: bool = False     # gas booked late across several slots and not explained by activity
+    parts: dict = field(default_factory=dict)
+
+
+def detect(samples: list[tuple[float, float]], kind: str, rise: float, within: float, settle: float,
+           drop: float) -> list[Event]:
+    """Humidity rises fast enough to be a shower or cooking."""
+    times = [t for t, _ in samples]
+    out, ev, floor = [], None, float('-inf')
+    for j, (t, v) in enumerate(samples):
+        if ev is None:
+            # the value at the window start, then every sample inside it; never reaching back into the last event
+            i0 = max(bisect.bisect_left(times, t - within, 0, j) - 1, bisect.bisect_left(times, floor, 0, j), 0)
+            if i0 >= j:
+                continue
+            win = range(i0, j)
+            lo = min(samples[i][1] for i in win)
+            if v - lo >= rise:
+                last_lo = max(i for i in win if samples[i][1] == lo)
+                ev = Event(kind, samples[last_lo + 1][0], t, v - lo)
+                peak, peak_t, base = v, t, lo
+        else:
+            if v > peak:
+                peak, peak_t = v, t
+                ev.rise = peak - base
+            elif t - peak_t >= settle or v <= peak - drop:
+                ev.end = floor = peak_t
+                out.append(ev)
+                ev = None
+    if ev is not None:
+        ev.end = peak_t
+        out.append(ev)
+    return [e for e in out if e.end - e.start >= MIN_EVENT]
+
+
+def events(showers: list[list], hobs: list[list], power: list[tuple[float, float]] | None) -> list[Event]:
+    evs = [e for s in showers for e in detect(s, 'shower', **SHOWER)]
+    for s in hobs:
+        for e in detect(s, 'hob', **HOB):
+            if any(0 <= e.start - x.end <= HOB_AFTER_SHOWER or x.start <= e.start <= x.end
+                   for x in evs if x.kind == 'shower'):
+                continue
+            if power:
+                inside = [m for t, m in power if e.start - 300 < t < e.end]
+                if inside and sum(m > OVEN_KW for m in inside) > len(inside) / 2:
+                    continue
+            evs.append(e)
+    return sorted(evs, key=lambda e: e.start)
+
+
+def _intervals(changes: list[tuple[float, bool]], t0: float, t1: float) -> list[tuple[float, float]]:
+    """On-intervals from (time, on) changes, clipped to [t0, t1)."""
+    out, on_since = [], None
+    for t, on in changes:
+        t = max(t, t0)
+        if on and on_since is None:
+            on_since = t
+        elif not on and on_since is not None:
+            if t > on_since:
+                out.append((on_since, min(t, t1)))
+            on_since = None
+    if on_since is not None and t1 > on_since:
+        out.append((on_since, t1))
+    return [(a, b) for a, b in out if b > a and a < t1]
+
+
+def _add(slots: dict, a: float, b: float, attr: str) -> None:
+    while a < b:
+        k = int(a // SLOT) * SLOT
+        e = min(b, k + SLOT)
+        if k in slots:
+            setattr(slots[k], attr, getattr(slots[k], attr) + e - a)
+        a = e
+
+
+def _overlap(xs, ys):
+    out = []
+    for a, b in xs:
+        for c, d in ys:
+            lo, hi = max(a, c), min(b, d)
+            if hi > lo:
+                out.append((lo, hi))
+    return out
+
+
+def _minus(xs, ys):
+    """xs with ys removed."""
+    out = []
+    for a, b in xs:
+        pieces = [(a, b)]
+        for c, d in ys:
+            nxt = []
+            for p, q in pieces:
+                if d <= p or c >= q:
+                    nxt.append((p, q))
+                else:
+                    if c > p:
+                        nxt.append((p, c))
+                    if d < q:
+                        nxt.append((d, q))
+            pieces = nxt
+        out += pieces
+    return out
+
+
+def build_slots(t0: float, t1: float, gas: list[tuple[float, float]], climate: list[tuple[float, str, str]],
+                evs: list[Event], kw: dict[str, float]) -> dict[float, Slot]:
+    """Slots in [t0, t1) with activity seconds and the gas booked for them."""
+    t0 = int(t0 // SLOT) * SLOT
+    slots = {k: Slot(k) for k in range(int(t0), int(t1), SLOT)}
+    heat = _intervals([(t, a == 'heating') for t, a, _ in climate], t0, t1)
+    boost = _intervals([(t, p == 'boost') for t, _, p in climate], t0, t1)
+    showers = [(e.start, e.end) for e in evs if e.kind == 'shower']
+    for a, b in _minus(heat, showers):
+        _add(slots, a, b, 'heat')
+    for a, b in _overlap(_minus(heat, showers), boost):
+        _add(slots, a, b, 'boost_heat')
+    for e in evs:
+        _add(slots, e.start, e.end, e.kind)
+
+    def expected(s: Slot) -> float:
+        return (kw['heat'] * s.heat + kw['dhw'] * s.shower + kw['hob'] * s.hob) / 3600
+
+    # Each reading books the slots since the previous reading; zero-gas slots produce no reading
+    for (p, v0), (u, v1) in zip(gas, gas[1:]):
+        delta = v1 - v0
+        if delta <= 0:
+            continue
+        covered = [k for k in range(int(p // SLOT) * SLOT, int(u // SLOT) * SLOT, SLOT) if k in slots]
+        if not covered:
+            continue
+        w = [expected(slots[k]) for k in covered]
+        if sum(w) > 0:
+            for k, wk in zip(covered, w):
+                slots[k].gas += delta * wk / sum(w)
+            lumped = len(covered) > 1 and delta > 2 * sum(w) + 1.0
+        else:
+            slots[covered[-1]].gas += delta
+            lumped = len(covered) > 2 and delta > 1.0
+        if lumped:
+            for k in covered:
+                slots[k].lumped = True
+    return slots
+
+
+def split_slot(s: Slot, kw: dict[str, float]) -> dict[str, float]:
+    """Share the slot's gas in proportion to the expected draw of each use."""
+    w = {'heating': kw['heat'] * s.heat, 'hot_water': kw['dhw'] * s.shower, 'hob': kw['hob'] * s.hob}
+    tot = sum(w.values())
+    if tot == 0:
+        # gas with nothing seen: hot taps (washing up, basins)
+        return {'heating': 0.0, 'hot_water': s.gas, 'hob': 0.0}
+    return {k: s.gas * v / tot for k, v in w.items()}
+
+
+def evidence(slots: dict[float, Slot], evs: list[Event], tz: ZoneInfo) -> dict[dt.date, dict]:
+    """Clean kWh and hours per use and local day: heating-only slots, showers and hob sessions on their own."""
+    out: dict[dt.date, dict] = {}
+
+    def add(t, key, g, h):
+        e = out.setdefault(dt.datetime.fromtimestamp(t, tz).date(), {})
+        e.setdefault(key, [0.0, 0.0])
+        e[key][0] += g
+        e[key][1] += h
+
+    for s in slots.values():
+        if not s.lumped and s.heat >= 300 and s.shower == 0 and s.hob == 0 and s.gas > 0:
+            add(s.start, 'heat', s.gas, s.heat / 3600)
+    for e in evs:
+        ks = [k for k in slots if k < e.end and k + SLOT > e.start]
+        # the slot after the event may hold the tail
+        nxt = int(e.end // SLOT) * SLOT + SLOT
+        if nxt in slots and e.end - int(e.end // SLOT) * SLOT > SLOT - 300:
+            ks.append(nxt)
+        group = [slots[k] for k in ks]
+        if not group or any(g.lumped or g.heat > 0 for g in group):
+            continue
+        other = 'hob' if e.kind == 'shower' else 'shower'
+        if any(getattr(g, other) > 0 for g in group):
+            continue
+        g = sum(x.gas for x in group)
+        if g > 0:
+            add(e.start, 'dhw' if e.kind == 'shower' else 'hob', g, (e.end - e.start) / 3600)
+    return out
+
+
+def kw_from(days: list[dict], prior: dict = PRIOR_KW) -> dict[str, float]:
+    """Pooled kW over days of evidence, shrunk towards the priors."""
+    gas = {k: p[0] * p[1] for k, p in prior.items()}
+    hours = {k: p[1] for k, p in prior.items()}
+    for d in days:
+        for k, (g, h) in d.items():
+            gas[k] += g
+            hours[k] += h
+    return {k: gas[k] / hours[k] for k in gas}
+
+
+def learn_kw(slots: dict[float, Slot], evs: list[Event], tz: ZoneInfo, prior: dict = PRIOR_KW) -> dict[str, float]:
+    return kw_from(list(evidence(slots, evs, tz).values()), prior)
+
+
+def daily(slots: dict[float, Slot], kw: dict[str, float], tz: ZoneInfo) -> dict[dt.date, dict]:
+    """Per local day (of each slot's start): heating, hot water, hob, boost heating and quality flags."""
+    out: dict[dt.date, dict] = {}
+    for s in sorted(slots.values(), key=lambda s: s.start):
+        d = dt.datetime.fromtimestamp(s.start, tz).date()
+        day = out.setdefault(d, {'heating': 0.0, 'hot_water': 0.0, 'hob': 0.0, 'boost_heating': 0.0,
+                                 'gas': 0.0, 'lumped': False, 'slots': 0})
+        parts = split_slot(s, kw)
+        s.parts = parts
+        for k, v in parts.items():
+            day[k] += v
+        if s.heat:
+            day['boost_heating'] += parts['heating'] * s.boost_heat / s.heat
+        day['gas'] += s.gas
+        day['lumped'] |= s.lumped
+        day['slots'] += 1
+    return out

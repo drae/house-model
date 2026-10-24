@@ -1,12 +1,15 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Paul Owen
 """Sensors: today's gas forecast (with the daily forecast list) and the forecast error."""
-from homeassistant.components.sensor import SensorEntity, SensorStateClass
+import datetime as dt
+
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from . import HouseModelConfigEntry
 from .const import DOMAIN
@@ -16,7 +19,10 @@ from .coordinator import HouseModelCoordinator
 async def async_setup_entry(hass: HomeAssistant, entry: HouseModelConfigEntry,
                             async_add_entities: AddConfigEntryEntitiesCallback) -> None:
     c = entry.runtime_data
-    async_add_entities([GasForecastSensor(c), GasForecastErrorSensor(c)])
+    entities = [GasForecastSensor(c), GasForecastErrorSensor(c)]
+    if c._split_enabled():
+        entities += [GasSplitSensor(c, use) for use in ('heating', 'hot_water', 'hob')]
+    async_add_entities(entities)
 
 
 class _Base(CoordinatorEntity[HouseModelCoordinator], SensorEntity):
@@ -69,3 +75,41 @@ class GasForecastErrorSensor(_Base):
     def extra_state_attributes(self):
         d = self.coordinator.data
         return {'model': d.get('model'), 'models': d.get('scores')}
+
+
+class GasSplitSensor(_Base):
+    """Gas so far today for one use, from the 30-minute meter slots."""
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_state_class = SensorStateClass.TOTAL
+    _unrecorded_attributes = frozenset({'yesterday', 'events', 'kw'})
+    ICONS = {'heating': 'mdi:radiator', 'hot_water': 'mdi:shower-head', 'hob': 'mdi:pot-steam'}
+
+    def __init__(self, coordinator: HouseModelCoordinator, use: str) -> None:
+        super().__init__(coordinator, f'gas_{use}_today')
+        self._use = use
+        self._attr_icon = self.ICONS[use]
+
+    @property
+    def native_value(self):
+        day = self.coordinator.data.get('split_today')
+        return round(day[self._use], 2) if day else None
+
+    @property
+    def last_reset(self) -> dt.datetime:
+        return dt_util.start_of_local_day()
+
+    @property
+    def extra_state_attributes(self):
+        d = self.coordinator.data
+        y = d.get('split_yesterday') or {}
+        attrs = {'yesterday': round(y[self._use], 2) if self._use in y else None,
+                 'yesterday_reliable': y.get('reliable')}
+        info = d.get('split_info') or {}
+        if self._use == 'heating':
+            today = d.get('split_today') or {}
+            attrs['boost'] = round(today.get('boost_heating', 0.0), 2)
+            attrs['kw'] = info.get('kw')
+        else:
+            kind = 'shower' if self._use == 'hot_water' else 'hob'
+            attrs['events'] = [e for e in info.get('events', []) if e['kind'] == kind]
+        return attrs

@@ -8,6 +8,8 @@ from .model import Day, Model
 
 # Last winter's shape as a loose prior: baseline ~1.5 kWh/day, slope ~3 kWh per degree-day
 PRIOR = {'a': (1.5, 3.0), 'b': (3.0, 3.0)}
+PRIOR_HEATING = {'a': (0.0, 1.0), 'b': (3.0, 3.0)}
+BASELINE_DAYS = 14   # non-heating gas (hot water, hob) averaged over this many split days
 FIRST_HEATING_KWH = 5.0  # the card rule: fit from the first day of the window at or above this
 COLD_OFF_T2 = 12.0       # a cold day with no heating at all is an away day or missing data
 
@@ -19,10 +21,12 @@ def make(name: str) -> Model:
         return Model(fit_base=True, window=30)
     if name == 'bayes':
         return Model(fit_base=True, window=None, half_life=21, prior=PRIOR)
+    if name == 'bayes_heating':
+        return Model(fit_base=True, window=None, half_life=21, prior=PRIOR_HEATING)
     raise ValueError(name)
 
 
-CANDIDATES = ('ols15', 'change_point', 'bayes')
+CANDIDATES = ('ols15', 'change_point', 'bayes', 'bayes_heating')
 
 
 @dataclass
@@ -81,19 +85,42 @@ def training(recs: dict, name: str, day: dt.date) -> list[Day]:
     return out
 
 
-def fitted(recs: dict, name: str, day: dt.date) -> Model | None:
+def reliable(split_day: dict | None) -> bool:
+    return bool(split_day) and split_day.get('reliable', False)
+
+
+def heating_recs(recs: dict, splits: dict) -> dict[dt.date, Rec]:
+    """Heating-only gas on days with a reliable split; other days are left out."""
+    return {k: Rec(splits[k]['heating'] if reliable(splits.get(k)) else None, r.t, r.excluded)
+            for k, r in recs.items()}
+
+
+def baseline(splits: dict, day: dt.date) -> float | None:
+    days = [splits[k]['gas'] - splits[k]['heating'] for k in sorted(splits, reverse=True)
+            if k < day and reliable(splits[k])][:BASELINE_DAYS]
+    return sum(days) / len(days) if len(days) >= 3 else None
+
+
+def fitted(recs: dict, name: str, day: dt.date, splits: dict | None = None) -> Model | None:
     m = make(name)
+    if name == 'bayes_heating':
+        base = baseline(splits or {}, day)
+        if base is None or not m.fit(training(heating_recs(recs, splits), name, day)):
+            return None
+        m.offset = base
+        return m
     return m if m.fit(training(recs, name, day)) else None
 
 
-def proxy_forecasts(recs: dict, name: str, start: dt.date, end: dt.date) -> dict[dt.date, float]:
+def proxy_forecasts(recs: dict, name: str, start: dt.date, end: dt.date,
+                    splits: dict | None = None) -> dict[dt.date, float]:
     """Rolling origin: fit on days before D, forecast D with D's observed temperature."""
     out = {}
     k = start
     while k <= end:
         r, t2 = recs.get(k), t2_of(recs, k)
         if r and t2 is not None:
-            m = fitted(recs, name, k)
+            m = fitted(recs, name, k, splits)
             if m:
                 out[k] = m.predict(t2)
         k += dt.timedelta(days=1)

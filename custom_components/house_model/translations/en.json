@@ -13,12 +13,18 @@
           "outdoor_temperature_fallback": "Outdoor temperature fallback",
           "heating_time": "Heating time today (hours, resets at midnight)",
           "climate": "Thermostat",
-          "weather": "Weather forecast"
+          "weather": "Weather forecast",
+          "shower_humidity": "Shower room humidity",
+          "hob_humidity": "Kitchen humidity",
+          "electricity_power": "Electricity power"
         },
         "data_description": {
           "outdoor_temperature_fallback": "Used for days the main sensor has no statistics.",
           "heating_time": "Cold days with no heating at all are left out of the fit.",
-          "climate": "Days with the thermostat off for 6 hours or more are left out of the fit."
+          "climate": "Days with the thermostat off for 6 hours or more are left out of the fit.",
+          "shower_humidity": "Fast rises mark showers, so the gas they use counts as hot water.",
+          "hob_humidity": "Fast rises mark hob cooking.",
+          "electricity_power": "A long high load during a kitchen rise means the electric oven, not the hob."
         }
       }
     }
@@ -30,6 +36,42 @@
       },
       "gas_forecast_error": {
         "name": "Gas forecast error"
+      },
+      "gas_heating_today": {
+        "name": "Gas heating today"
+      },
+      "gas_hot_water_today": {
+        "name": "Gas hot water today"
+      },
+      "gas_hob_today": {
+        "name": "Gas hob today"
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "House model",
+        "description": "Pick the sensors the gas forecast learns from.",
+        "data": {
+          "gas_energy": "Gas energy (kWh, cumulative)",
+          "outdoor_temperature": "Outdoor temperature",
+          "outdoor_temperature_fallback": "Outdoor temperature fallback",
+          "heating_time": "Heating time today (hours, resets at midnight)",
+          "climate": "Thermostat",
+          "weather": "Weather forecast",
+          "shower_humidity": "Shower room humidity",
+          "hob_humidity": "Kitchen humidity",
+          "electricity_power": "Electricity power"
+        },
+        "data_description": {
+          "outdoor_temperature_fallback": "Used for days the main sensor has no statistics.",
+          "heating_time": "Cold days with no heating at all are left out of the fit.",
+          "climate": "Days with the thermostat off for 6 hours or more are left out of the fit.",
+          "shower_humidity": "Fast rises mark showers, so the gas they use counts as hot water.",
+          "hob_humidity": "Fast rises mark hob cooking.",
+          "electricity_power": "A long high load during a kitchen rise means the electric oven, not the hob."
+        }
       }
     }
   }

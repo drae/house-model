@@ -5,7 +5,7 @@ import datetime as dt
 import logging
 from zoneinfo import ZoneInfo
 
-from homeassistant.components.recorder import get_instance
+from homeassistant.components.recorder import get_instance, history
 from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
@@ -14,10 +14,11 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
-from .const import (CONF_CLIMATE, CONF_GAS, CONF_HEATING_TIME, CONF_OUTDOOR,
-                    CONF_OUTDOOR_FALLBACK, CONF_WEATHER, DOMAIN, KEEP_AWAY_DAYS,
-                    KEEP_ISSUED_DAYS, STORE_VERSION)
-from .core import data, gas
+from .const import (CONF_CLIMATE, CONF_GAS, CONF_HEATING_TIME, CONF_HOB_HUMIDITY, CONF_OUTDOOR,
+                    CONF_OUTDOOR_FALLBACK, CONF_POWER, CONF_SHOWER_HUMIDITY, CONF_WEATHER, DOMAIN,
+                    EVIDENCE_DAYS, HISTORY_DAYS, KEEP_AWAY_DAYS, KEEP_ISSUED_DAYS, KEEP_SPLIT_DAYS,
+                    STORE_VERSION)
+from .core import data, gas, split
 
 _LOGGER = logging.getLogger(__name__)
 FORECAST_DAYS = 10
@@ -26,10 +27,11 @@ FORECAST_DAYS = 10
 class HouseModelCoordinator(DataUpdateCoordinator[dict]):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         super().__init__(hass, _LOGGER, name=DOMAIN, update_interval=dt.timedelta(hours=1), config_entry=entry)
-        self.conf = entry.data
+        self.conf = {**entry.data, **entry.options}
         self._store = Store(hass, STORE_VERSION, f'{DOMAIN}.{entry.entry_id}')
-        # issued: model -> ISO date -> kWh forecast made on that day; away: ISO date -> minutes with heating off
-        self.saved = {'issued': {}, 'away': {}, 'active': None}
+        # issued: model -> ISO date -> kWh forecast made on that day; away: ISO date -> minutes with heating off;
+        # split: ISO date -> gas by use; evidence: ISO date -> clean kWh/hours per use
+        self.saved = {'issued': {}, 'away': {}, 'active': None, 'split': {}, 'evidence': {}}
         self._proxy: dict[str, dict[dt.date, float]] = {}
         self._proxy_day: dt.date | None = None
         self._off_since: dt.datetime | None = None
@@ -104,23 +106,93 @@ class HouseModelCoordinator(DataUpdateCoordinator[dict]):
         fc = await self._forecast_temps(tz)
         self._prune(today)
         away = {dt.date.fromisoformat(k): v for k, v in self.saved['away'].items()}
-        result = await self.hass.async_add_executor_job(self._compute, stats, fc, away, tz, today, now)
+        hist = None
+        if self._split_enabled():
+            back = 2 if self.saved['split'] else HISTORY_DAYS - 1
+            hist = await get_instance(self.hass).async_add_executor_job(
+                self._history, dt_util.start_of_local_day(today - dt.timedelta(days=back)))
+        result = await self.hass.async_add_executor_job(self._compute, stats, fc, away, hist, tz, today, now)
         await self._store.async_save(self.saved)
         return result
 
-    def _compute(self, stats: dict, fc: dict, away: dict, tz: ZoneInfo, today: dt.date, now: dt.datetime) -> dict:
+    def _split_enabled(self) -> bool:
+        return bool(self.conf.get(CONF_CLIMATE) and (self.conf.get(CONF_SHOWER_HUMIDITY) or self.conf.get(CONF_HOB_HUMIDITY)))
+
+    def _history(self, start: dt.datetime) -> dict:
+        """State history for the gas split (recorder executor)."""
+        def numeric(states):
+            out = []
+            for st in states:
+                try:
+                    out.append((st.last_updated.timestamp(), float(st.state)))
+                except (TypeError, ValueError):
+                    continue
+            return out
+
+        shower = list(self.conf.get(CONF_SHOWER_HUMIDITY) or [])
+        hob = list(self.conf.get(CONF_HOB_HUMIDITY) or [])
+        ids = [self.conf[CONF_GAS], *shower, *hob]
+        num = history.get_significant_states(self.hass, start, None, ids, include_start_time_state=True,
+                                             significant_changes_only=False, no_attributes=True)
+        clim = history.get_significant_states(self.hass, start, None, [self.conf[CONF_CLIMATE]],
+                                              include_start_time_state=True, significant_changes_only=False)
+        climate = [(st.last_updated.timestamp(), st.attributes.get('hvac_action'), st.attributes.get('preset_mode'))
+                   for st in clim.get(self.conf[CONF_CLIMATE], []) if st.state not in ('unavailable', 'unknown')]
+        power = None
+        if self.conf.get(CONF_POWER):
+            rows = statistics_during_period(self.hass, start, None, {self.conf[CONF_POWER]}, '5minute', None, {'mean'})
+            power = [(r['start'], r['mean']) for r in rows.get(self.conf[CONF_POWER], []) if r.get('mean') is not None]
+        return {
+            'start': start.timestamp(),
+            'gas': numeric(num.get(self.conf[CONF_GAS], [])),
+            'shower': [numeric(num.get(e, [])) for e in shower],
+            'hob': [numeric(num.get(e, [])) for e in hob],
+            'climate': climate,
+            'power': power,
+        }
+
+    def _split(self, hist: dict, lts_gas: dict, tz: ZoneInfo, today: dt.date, now: dt.datetime) -> dict:
+        """Recompute the split for the fetched window and store finished days."""
+        evs = split.events(hist['shower'], hist['hob'], hist['power'])
+        first = dt.datetime.fromtimestamp(hist['start'], tz).date()
+        old = [v for d, v in self.saved['evidence'].items()
+               if d < first.isoformat() and d >= (today - dt.timedelta(days=EVIDENCE_DAYS)).isoformat()]
+        kw = split.kw_from(old)
+        slots = split.build_slots(hist['start'], now.timestamp(), hist['gas'], hist['climate'], evs, kw)
+        for d in [d for d in self.saved['evidence'] if d >= first.isoformat()]:
+            del self.saved['evidence'][d]
+        for d, ev in split.evidence(slots, evs, tz).items():
+            self.saved['evidence'][d.isoformat()] = ev
+        kw = split.kw_from([v for d, v in self.saved['evidence'].items()
+                            if d >= (today - dt.timedelta(days=EVIDENCE_DAYS)).isoformat()])
+        for d, v in split.daily(slots, kw, tz).items():
+            lts = lts_gas.get(d)
+            v['reliable'] = (d < today and not v['lumped'] and v['slots'] >= 46
+                             and lts is not None and abs(v['gas'] - lts) <= 0.5)
+            self.saved['split'][d.isoformat()] = {k: (round(x, 3) if isinstance(x, float) else x) for k, x in v.items()}
+        today_evs = [{'kind': e.kind, 'start': dt.datetime.fromtimestamp(e.start, tz).isoformat(timespec='minutes'),
+                      'minutes': round((e.end - e.start) / 60, 1)}
+                     for e in evs if dt.datetime.fromtimestamp(e.start, tz).date() == today]
+        return {'kw': {k: round(v, 2) for k, v in kw.items()}, 'events': today_evs}
+
+    def _compute(self, stats: dict, fc: dict, away: dict, hist: dict | None, tz: ZoneInfo, today: dt.date,
+                 now: dt.datetime) -> dict:
         rows = lambda key: stats.get(self.conf.get(key), []) if self.conf.get(key) else []
         gas_rows = rows(CONF_GAS)
         temp = data.daily_mean(rows(CONF_OUTDOOR), tz)
         for k, v in data.daily_mean(rows(CONF_OUTDOOR_FALLBACK), tz).items():
             temp.setdefault(k, v)
         heat = data.daily_running_max(rows(CONF_HEATING_TIME), tz) if self.conf.get(CONF_HEATING_TIME) else None
-        recs = gas.build(data.daily_from_sum(gas_rows, tz), temp, heat, away)
+        lts_gas = data.daily_from_sum(gas_rows, tz)
+        recs = gas.build(lts_gas, temp, heat, away)
+        split_info = self._split(hist, lts_gas, tz, today, now) if hist else None
+        splits = {dt.date.fromisoformat(d): v for d, v in self.saved['split'].items()}
 
         # Rolling-origin scores on observed weather until the model's own issued forecasts take over
         if self._proxy_day != today:
             first = gas.season_start(today)
-            self._proxy = {n: gas.proxy_forecasts(recs, n, first, today - dt.timedelta(days=1)) for n in gas.CANDIDATES}
+            self._proxy = {n: gas.proxy_forecasts(recs, n, first, today - dt.timedelta(days=1), splits)
+                           for n in gas.CANDIDATES}
             self._proxy_day = today
 
         # Forecast temperatures: the weather forecast, then the last week's mean beyond it
@@ -136,7 +208,7 @@ class HouseModelCoordinator(DataUpdateCoordinator[dict]):
 
         scores, models = {}, {}
         for n in gas.CANDIDATES:
-            m = gas.fitted(recs, n, today)
+            m = gas.fitted(recs, n, today, splits)
             models[n] = m
             issued = self.saved['issued'].setdefault(n, {})
             t2 = gas.t2_of(recs, today, temps)
@@ -163,8 +235,12 @@ class HouseModelCoordinator(DataUpdateCoordinator[dict]):
             'forecast': forecast,
             'hourly_share': data.hourly_share(gas_rows, tz, today),
             'model': active,
-            'coefficients': {'a': round(m.a, 3), 'b': round(m.b, 3), 'base': m.base, 'days': m.days} if m else None,
+            'coefficients': {'a': round(m.a, 3), 'b': round(m.b, 3), 'base': m.base, 'days': m.days,
+                             'offset': round(m.offset, 3)} if m else None,
             'scores': {n: {k: (round(v, 2) if isinstance(v, float) else v) for k, v in s.items()} for n, s in scores.items()},
+            'split_today': self.saved['split'].get(today.isoformat()),
+            'split_yesterday': self.saved['split'].get((today - dt.timedelta(days=1)).isoformat()),
+            'split_info': split_info,
             'updated': now.isoformat(),
         }
 
@@ -176,3 +252,9 @@ class HouseModelCoordinator(DataUpdateCoordinator[dict]):
         old = (today - dt.timedelta(days=KEEP_AWAY_DAYS)).isoformat()
         for d in [d for d in self.saved['away'] if d < old]:
             del self.saved['away'][d]
+        old = (today - dt.timedelta(days=KEEP_SPLIT_DAYS)).isoformat()
+        for d in [d for d in self.saved['split'] if d < old]:
+            del self.saved['split'][d]
+        old = (today - dt.timedelta(days=EVIDENCE_DAYS + HISTORY_DAYS)).isoformat()
+        for d in [d for d in self.saved['evidence'] if d < old]:
+            del self.saved['evidence'][d]
