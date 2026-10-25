@@ -112,7 +112,11 @@ class GasSplitSensor(_Base):
             attrs['boost'] = round(today.get('boost_heating', 0.0), 2)
             attrs['kw'] = info.get('kw')
             attrs['days'] = d.get('split_days')
-        elif self._use != 'boost':
-            kind = 'shower' if self._use == 'hot_water' else 'hob'
-            attrs['events'] = [e for e in info.get('events', []) if e['kind'] == kind]
+        elif self._use == 'hot_water':
+            today = d.get('split_today') or {}
+            attrs['shower'] = round(today.get('shower', 0.0), 2)
+            attrs['taps'] = round(today.get('taps', 0.0), 2)
+            attrs['events'] = [e for e in info.get('events', []) if e['kind'] in ('shower', 'tap')]
+        elif self._use == 'hob':
+            attrs['events'] = [e for e in info.get('events', []) if e['kind'] == 'hob']
         return attrs

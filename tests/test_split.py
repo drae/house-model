@@ -8,7 +8,7 @@ from core import split
 from fixtures_evenings import (BATHROOM_24, CLIMATE_24, GAS_22, GAS_24, KITCHEN_22, KITCHEN_24, POWER_22,
                                POWER_24, TZ, ts)
 
-KW = {'heat': 17.0, 'dhw': 14.0, 'hob': 1.3}
+KW = {'heat': 17.0, 'dhw': 14.0, 'tap': 17.0, 'hob': 1.3}
 
 
 def test_shower_detected_from_bathroom_humidity():
@@ -48,7 +48,8 @@ def test_evening_24_split():
     d24 = days[dt.date(2026, 10, 24)]
     assert d24['heating'] == pytest.approx(5.492 + 5.136)
     assert d24['boost_heating'] == pytest.approx(5.136)
-    assert d24['hot_water'] == pytest.approx(4.019)
+    assert d24['hot_water'] == d24['shower'] == pytest.approx(4.019)
+    assert d24['taps'] == 0
     assert d24['hob'] == 0
 
 
@@ -86,7 +87,7 @@ def test_brief_bathroom_draw_shares_a_slot_with_the_hob():
     t = ts('2026-10-19T14:30')
     bath = [(t, 54.0), (t + 60, 56.0), (t + 100, 58.0), (t + 140, 60.0), (t + 400, 59.0), (t + 500, 56.0)]
     evs = split.events([bath], [], None)
-    assert [(e.kind, e.end - e.start) for e in evs] == [('shower', 80.0)]
+    assert [(e.kind, e.end - e.start) for e in evs] == [('tap', 80.0)]
     hob = split.Event('hob', t + 300, t + 1500, 7)
     slots = split.build_slots(t, t + 1800, [(t, 0.0), (t + 1820, 1.0)], [(t, 'idle', 'none')], evs + [hob], KW)
     parts = split.split_slot(slots[t], KW)
@@ -134,3 +135,27 @@ def test_tea_kettle_without_its_own_gas_is_not_hob():
     slots = split.build_slots(t - 3 * 3600, t + 3600, gas, [(t - 3 * 3600, 'idle', 'none')], evs, KW)
     assert all(s.hob == 0 for s in slots.values())
     assert split.daily(slots, KW, TZ)[dt.date(2026, 10, 16)]['hot_water'] == pytest.approx(0.6)
+
+
+def test_basin_fill_is_a_tap_and_teaches_the_tap_rate():
+    from fixtures_evenings import BATHROOM_25, CLIMATE_25, GAS_25
+    evs = split.events([BATHROOM_25], [], None, CLIMATE_25)
+    assert [(e.kind, e.start, e.end) for e in evs] == [('tap', ts('2026-10-25T17:46:50'), ts('2026-10-25T17:49:10'))]
+    slots = split.build_slots(ts('2026-10-25T08:30'), ts('2026-10-25T18:30'), GAS_25, CLIMATE_25, evs, KW)
+    # the reading books every slot since 08:30; only the tap's slot can explain it
+    assert slots[ts('2026-10-25T17:30')].gas == pytest.approx(0.647)
+    assert not any(s.lumped for s in slots.values())
+    day = split.daily(slots, KW, TZ)[dt.date(2026, 10, 25)]
+    assert day['taps'] == day['hot_water'] == pytest.approx(0.647)
+    assert day['shower'] == 0
+    ev = split.evidence(slots, evs, TZ)[dt.date(2026, 10, 25)]
+    assert list(ev) == ['tap'] and ev['tap'] == pytest.approx([0.647, 140 / 3600])
+    kw = split.kw_from([ev])
+    assert 16.6 < kw['tap'] < 17 and kw['dhw'] == 14.0
+
+
+def test_unseen_gas_counts_as_taps():
+    t = ts('2026-10-20T12:00')
+    slots = split.build_slots(t, t + 1800, [(t, 0.0), (t + 1820, 0.3)], [(t, 'idle', 'none')], [], KW)
+    parts = split.split_slot(slots[t], KW)
+    assert parts['taps'] == parts['hot_water'] == pytest.approx(0.3) and parts['shower'] == 0

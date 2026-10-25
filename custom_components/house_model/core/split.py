@@ -3,7 +3,7 @@
 """Split metered gas into heating, hot water and hob, per 30-minute meter slot.
 
 Inputs are state histories: the cumulative gas meter, the thermostat's hvac_action/preset_mode,
-humidity in hot-water rooms (showers) and the kitchen (hob), and optionally 5-minute electricity means.
+humidity in hot-water rooms (showers and taps) and the kitchen (hob), and optionally 5-minute electricity means.
 """
 import bisect
 import datetime as dt
@@ -20,7 +20,8 @@ HOB_AFTER_SHOWER = 1800  # bathroom steam reaching the kitchen is not cooking
 OVEN_KW = 1.5            # an electric load above this for most of a kitchen event = oven, not hob
 MIN_EVENT = 180          # shortest hob session, and the shortest event rates are learned from
 MIN_SHOWER = 60          # brief hot-water draws in a shower room still claim their share of a slot
-MAX_KW = {'dhw': 35.0, 'hob': 3.0}  # evidence above these is something else (a domestic burner tops out ~3 kW)
+TAP_MAX = 300            # a shower-room event shorter than this is a tap (basin fill, hand wash), not a shower
+MAX_KW = {'dhw': 35.0, 'tap': 35.0, 'hob': 3.0}  # evidence above these is something else (a domestic burner tops out ~3 kW)
 
 # Pans filled from the kettle: a short burst (5-minute max >= 2.5 kW for at most two buckets, then the load
 # drops) with the boiler idle stands in for a hob session when the kitchen humidity shows none.
@@ -30,13 +31,15 @@ KETTLE_AFTER_KW = 0.8
 KETTLE_HOB = 1200
 KETTLE_GAS = 0.1  # the slot after the kettle must have its own reading of at least this, unexplained
 
-# Priors (kW) and their weight in hours of evidence
-PRIOR_KW = {'heat': (17.0, 1.0), 'dhw': (14.0, 0.25), 'hob': (1.3, 0.3)}
+# Priors (kW) and their weight in hours of evidence. A tap runs the burner flat out with no mixing down,
+# and a short draw also pays for heating the exchanger and pipes: 25 Oct basin fill 0.647 kWh in 140 s.
+PRIOR_KW = {'heat': (17.0, 1.0), 'dhw': (14.0, 0.25), 'tap': (17.0, 0.1), 'hob': (1.3, 0.3)}
+RATE = {'shower': 'dhw', 'tap': 'tap', 'hob': 'hob'}  # event kind -> rate key
 
 
 @dataclass
 class Event:
-    kind: str    # 'shower' or 'hob'
+    kind: str    # 'shower', 'tap' or 'hob'
     start: float
     end: float
     rise: float
@@ -50,6 +53,7 @@ class Slot:
     heat: float = 0.0        # seconds calling for heat outside showers (a combi serves hot water first)
     boost_heat: float = 0.0  # of which with boost on
     shower: float = 0.0
+    tap: float = 0.0
     hob: float = 0.0
     lumped: bool = False     # gas booked late across several slots and not explained by activity
     parts: dict = field(default_factory=dict)
@@ -106,6 +110,9 @@ def kettles(power: list[tuple]) -> list[tuple[float, float]]:
 def events(showers: list[list], hobs: list[list], power: list[tuple] | None,
            climate: list[tuple[float, str, str]] | None = None) -> list[Event]:
     evs = [e for s in showers for e in detect(s, 'shower', **SHOWER, min_len=MIN_SHOWER)]
+    for e in evs:
+        if e.end - e.start < TAP_MAX:
+            e.kind = 'tap'
     after_shower = lambda t: any(0 <= t - x.end <= HOB_AFTER_SHOWER or x.start <= t <= x.end
                                  for x in evs if x.kind == 'shower')
     for s in hobs:
@@ -190,17 +197,17 @@ def build_slots(t0: float, t1: float, gas: list[tuple[float, float]], climate: l
     slots = {k: Slot(k) for k in range(int(t0), int(t1), SLOT)}
     heat = _intervals([(t, a == 'heating') for t, a, _ in climate], t0, t1)
     boost = _intervals([(t, p == 'boost') for t, _, p in climate], t0, t1)
-    showers = [(e.start, e.end) for e in evs if e.kind == 'shower']
-    for a, b in _minus(heat, showers):
+    draws = [(e.start, e.end) for e in evs if e.kind in ('shower', 'tap')]
+    for a, b in _minus(heat, draws):
         _add(slots, a, b, 'heat')
-    for a, b in _overlap(_minus(heat, showers), boost):
+    for a, b in _overlap(_minus(heat, draws), boost):
         _add(slots, a, b, 'boost_heat')
     for e in evs:
         if not e.inferred:
             _add(slots, e.start, e.end, e.kind)
 
     def expected(s: Slot) -> float:
-        return (kw['heat'] * s.heat + kw['dhw'] * s.shower + kw['hob'] * s.hob) / 3600
+        return (kw['heat'] * s.heat + kw['dhw'] * s.shower + kw['tap'] * s.tap + kw['hob'] * s.hob) / 3600
 
     # Each reading books the slots since the previous reading; zero-gas slots produce no reading
     single = set()
@@ -231,23 +238,27 @@ def build_slots(t0: float, t1: float, gas: list[tuple[float, float]], climate: l
             continue
         for k in range(int(e.start // SLOT) * SLOT, int(e.end), SLOT):
             s = slots.get(k)
-            if s and k in single and s.gas >= KETTLE_GAS and s.heat == 0 and s.shower == 0 and s.hob == 0:
+            if s and k in single and s.gas >= KETTLE_GAS and s.heat == 0 and s.shower == 0 and s.tap == 0 and s.hob == 0:
                 s.hob = min(e.end, k + SLOT) - max(e.start, k)
     return slots
 
 
 def split_slot(s: Slot, kw: dict[str, float]) -> dict[str, float]:
-    """Share the slot's gas in proportion to the expected draw of each use."""
-    w = {'heating': kw['heat'] * s.heat, 'hot_water': kw['dhw'] * s.shower, 'hob': kw['hob'] * s.hob}
+    """Share the slot's gas in proportion to the expected draw of each use; hot water = shower + taps."""
+    w = {'heating': kw['heat'] * s.heat, 'shower': kw['dhw'] * s.shower, 'taps': kw['tap'] * s.tap,
+         'hob': kw['hob'] * s.hob}
     tot = sum(w.values())
     if tot == 0:
-        # gas with nothing seen: hot taps (washing up, basins)
-        return {'heating': 0.0, 'hot_water': s.gas, 'hob': 0.0}
-    return {k: s.gas * v / tot for k, v in w.items()}
+        # gas with nothing seen: hot taps elsewhere (washing up, the kitchen sink)
+        w = {'heating': 0.0, 'shower': 0.0, 'taps': 1.0, 'hob': 0.0}
+        tot = 1.0
+    parts = {k: s.gas * v / tot for k, v in w.items()}
+    parts['hot_water'] = parts['shower'] + parts['taps']
+    return parts
 
 
 def evidence(slots: dict[float, Slot], evs: list[Event], tz: ZoneInfo) -> dict[dt.date, dict]:
-    """Clean kWh and hours per use and local day: heating-only slots, showers and hob sessions on their own."""
+    """Clean kWh and hours per use and local day: heating-only slots, showers, taps and hob sessions on their own."""
     out: dict[dt.date, dict] = {}
 
     def add(t, key, g, h):
@@ -260,7 +271,7 @@ def evidence(slots: dict[float, Slot], evs: list[Event], tz: ZoneInfo) -> dict[d
         if not s.lumped and s.heat >= 300 and s.shower == 0 and s.hob == 0 and s.gas > 0:
             add(s.start, 'heat', s.gas, s.heat / 3600)
     for e in evs:
-        if e.inferred or e.end - e.start < MIN_EVENT:
+        if e.inferred or e.end - e.start < (MIN_SHOWER if e.kind == 'tap' else MIN_EVENT):
             continue
         ks = [k for k in slots if k < e.end and k + SLOT > e.start]
         # the slot after the event may hold the tail
@@ -270,11 +281,13 @@ def evidence(slots: dict[float, Slot], evs: list[Event], tz: ZoneInfo) -> dict[d
         group = [slots[k] for k in ks]
         if not group or any(g.lumped or g.heat > 0 for g in group):
             continue
-        other = 'hob' if e.kind == 'shower' else 'shower'
-        if any(getattr(g, other) > 0 for g in group):
+        if any(getattr(g, k) > 0 for g in group for k in RATE if k != e.kind):
+            continue
+        # another event sharing these slots would be counted against this one's hours
+        if any(x is not e and not x.inferred and x.start < max(ks) + SLOT and x.end > min(ks) for x in evs):
             continue
         g, h = sum(x.gas for x in group), (e.end - e.start) / 3600
-        key = 'dhw' if e.kind == 'shower' else 'hob'
+        key = RATE[e.kind]
         if 0 < g <= MAX_KW[key] * h:
             add(e.start, key, g, h)
     return out
@@ -296,12 +309,12 @@ def learn_kw(slots: dict[float, Slot], evs: list[Event], tz: ZoneInfo, prior: di
 
 
 def daily(slots: dict[float, Slot], kw: dict[str, float], tz: ZoneInfo) -> dict[dt.date, dict]:
-    """Per local day (of each slot's start): heating, hot water, hob, boost heating and quality flags."""
+    """Per local day (of each slot's start): heating, hot water (shower + taps), hob, boost heating and quality flags."""
     out: dict[dt.date, dict] = {}
     for s in sorted(slots.values(), key=lambda s: s.start):
         d = dt.datetime.fromtimestamp(s.start, tz).date()
-        day = out.setdefault(d, {'heating': 0.0, 'hot_water': 0.0, 'hob': 0.0, 'boost_heating': 0.0,
-                                 'gas': 0.0, 'lumped': False, 'slots': 0})
+        day = out.setdefault(d, {'heating': 0.0, 'hot_water': 0.0, 'shower': 0.0, 'taps': 0.0, 'hob': 0.0,
+                                 'boost_heating': 0.0, 'gas': 0.0, 'lumped': False, 'slots': 0})
         parts = split_slot(s, kw)
         s.parts = parts
         for k, v in parts.items():

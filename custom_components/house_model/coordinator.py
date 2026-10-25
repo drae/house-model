@@ -261,7 +261,8 @@ class HouseModelCoordinator(DataUpdateCoordinator[dict]):
     def _split_days(self, today: dt.date) -> dict:
         """The last SPLIT_ATTR_DAYS days of the split, rounded, for charts that cover more than the statistics do."""
         old = (today - dt.timedelta(days=SPLIT_ATTR_DAYS - 1)).isoformat()
-        return {d: {'heating': round(v['heating'], 3), 'hot_water': round(v['hot_water'], 3), 'hob': round(v['hob'], 3),
+        return {d: {'heating': round(v['heating'], 3), 'hot_water': round(v['hot_water'], 3),
+                    'taps': round(v.get('taps', 0.0), 3), 'hob': round(v['hob'], 3),
                     'boost': round(v.get('boost_heating', 0.0), 3), 'gas': round(v['gas'], 3), 'reliable': v.get('reliable')}
                 for d, v in sorted(self.saved['split'].items()) if d >= old}
 
