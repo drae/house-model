@@ -68,6 +68,7 @@ The split is rebuilt from the recorder's state history on every refresh, for the
 | `sensor.house_model_gas_heating_today` | heating gas so far today, kWh | `boost` (heating gas while boost was on), `kw` (learned rates), `yesterday`, `yesterday_reliable` |
 | `sensor.house_model_gas_hot_water_today` | hot water gas so far today, kWh | `events` (showers today), `yesterday`, `yesterday_reliable` |
 | `sensor.house_model_gas_hob_today` | hob gas so far today, kWh | `events` (hob sessions today), `yesterday`, `yesterday_reliable` |
+| `sensor.house_model_gas_boost_today` | the part of heating gas so far today used while boost was on, kWh | `yesterday`, `yesterday_reliable` |
 
 The split sensors appear when a thermostat and at least one humidity sensor are set. The large attributes are not written to the recorder.
 

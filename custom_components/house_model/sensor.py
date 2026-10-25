@@ -21,7 +21,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HouseModelConfigEntry,
     c = entry.runtime_data
     entities = [GasForecastSensor(c), GasForecastErrorSensor(c)]
     if c._split_enabled():
-        entities += [GasSplitSensor(c, use) for use in ('heating', 'hot_water', 'hob')]
+        entities += [GasSplitSensor(c, use) for use in ('heating', 'hot_water', 'hob', 'boost')]
     async_add_entities(entities)
 
 
@@ -78,21 +78,23 @@ class GasForecastErrorSensor(_Base):
 
 
 class GasSplitSensor(_Base):
-    """Gas so far today for one use, from the 30-minute meter slots."""
+    """Gas so far today for one use, from the 30-minute meter slots; boost is the part of heating with boost on."""
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_state_class = SensorStateClass.TOTAL
     _unrecorded_attributes = frozenset({'yesterday', 'events', 'kw'})
-    ICONS = {'heating': 'mdi:radiator', 'hot_water': 'mdi:shower-head', 'hob': 'mdi:pot-steam'}
+    ICONS = {'heating': 'mdi:radiator', 'hot_water': 'mdi:shower-head', 'hob': 'mdi:pot-steam', 'boost': 'mdi:fire-alert'}
+    FIELDS = {'boost': 'boost_heating'}
 
     def __init__(self, coordinator: HouseModelCoordinator, use: str) -> None:
         super().__init__(coordinator, f'gas_{use}_today')
         self._use = use
+        self._field = self.FIELDS.get(use, use)
         self._attr_icon = self.ICONS[use]
 
     @property
     def native_value(self):
         day = self.coordinator.data.get('split_today')
-        return round(day[self._use], 2) if day else None
+        return round(day.get(self._field, 0.0), 2) if day else None
 
     @property
     def last_reset(self) -> dt.datetime:
@@ -102,14 +104,14 @@ class GasSplitSensor(_Base):
     def extra_state_attributes(self):
         d = self.coordinator.data
         y = d.get('split_yesterday') or {}
-        attrs = {'yesterday': round(y[self._use], 2) if self._use in y else None,
+        attrs = {'yesterday': round(y[self._field], 2) if self._field in y else None,
                  'yesterday_reliable': y.get('reliable')}
         info = d.get('split_info') or {}
         if self._use == 'heating':
             today = d.get('split_today') or {}
             attrs['boost'] = round(today.get('boost_heating', 0.0), 2)
             attrs['kw'] = info.get('kw')
-        else:
+        elif self._use != 'boost':
             kind = 'shower' if self._use == 'hot_water' else 'hob'
             attrs['events'] = [e for e in info.get('events', []) if e['kind'] == kind]
         return attrs

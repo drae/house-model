@@ -45,6 +45,9 @@
       },
       "gas_hob_today": {
         "name": "Gas hob today"
+      },
+      "gas_boost_today": {
+        "name": "Gas boost today"
       }
     }
   },
