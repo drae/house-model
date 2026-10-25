@@ -16,7 +16,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import (CONF_CLIMATE, CONF_GAS, CONF_HEATING_TIME, CONF_HOB_HUMIDITY, CONF_OUTDOOR,
                     CONF_OUTDOOR_FALLBACK, CONF_POWER, CONF_SHOWER_HUMIDITY, CONF_WEATHER, DOMAIN,
-                    EVIDENCE_DAYS, HISTORY_DAYS, KEEP_AWAY_DAYS, KEEP_ISSUED_DAYS, KEEP_SPLIT_DAYS,
+                    EVIDENCE_DAYS, HISTORY_DAYS, KEEP_AWAY_DAYS, KEEP_ISSUED_DAYS, KEEP_SPLIT_DAYS, SPLIT_ATTR_DAYS,
                     STORE_VERSION)
 from .core import data, gas, split
 
@@ -253,9 +253,17 @@ class HouseModelCoordinator(DataUpdateCoordinator[dict]):
             'scores': {n: {k: (round(v, 2) if isinstance(v, float) else v) for k, v in s.items()} for n, s in scores.items()},
             'split_today': self.saved['split'].get(today.isoformat()),
             'split_yesterday': self.saved['split'].get((today - dt.timedelta(days=1)).isoformat()),
+            'split_days': self._split_days(today),
             'split_info': split_info,
             'updated': now.isoformat(),
         }
+
+    def _split_days(self, today: dt.date) -> dict:
+        """The last SPLIT_ATTR_DAYS days of the split, rounded, for charts that cover more than the statistics do."""
+        old = (today - dt.timedelta(days=SPLIT_ATTR_DAYS - 1)).isoformat()
+        return {d: {'heating': round(v['heating'], 3), 'hot_water': round(v['hot_water'], 3), 'hob': round(v['hob'], 3),
+                    'boost': round(v.get('boost_heating', 0.0), 3), 'gas': round(v['gas'], 3), 'reliable': v.get('reliable')}
+                for d, v in sorted(self.saved['split'].items()) if d >= old}
 
     def _prune(self, today: dt.date) -> None:
         old = (today - dt.timedelta(days=KEEP_ISSUED_DAYS)).isoformat()

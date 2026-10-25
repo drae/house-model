@@ -17,5 +17,6 @@ STORE_VERSION = 1
 KEEP_ISSUED_DAYS = 120
 KEEP_AWAY_DAYS = 400
 KEEP_SPLIT_DAYS = 400
+SPLIT_ATTR_DAYS = 35  # days of split on gas_heating_today's days attribute
 HISTORY_DAYS = 10     # the recorder's default state history; the split backfills this far once
 EVIDENCE_DAYS = 30    # days of clean events pooled into the learned kW rates

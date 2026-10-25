@@ -65,7 +65,7 @@ The split is rebuilt from the recorder's state history on every refresh, for the
 | --- | --- | --- |
 | `sensor.house_model_gas_forecast_today` | whole-day gas forecast for today, kWh | `forecast` (list of `date`, `kwh`, `weather`: `forecast` or `recent`), `hourly_share` (share of a day's gas in each hour over the last 14 days), `model`, `coefficients` |
 | `sensor.house_model_gas_forecast_error` | the active model's mean absolute error over the last 28 days, kWh/day | `model`, `models` (each model's 14- and 28-day error and day counts) |
-| `sensor.house_model_gas_heating_today` | heating gas so far today, kWh | `boost` (heating gas while boost was on), `kw` (learned rates), `yesterday`, `yesterday_reliable` |
+| `sensor.house_model_gas_heating_today` | heating gas so far today, kWh | `boost` (heating gas while boost was on), `kw` (learned rates), `days` (the split for each of the last 35 days: `heating`, `hot_water`, `hob`, `boost`, `gas`, `reliable`), `yesterday`, `yesterday_reliable` |
 | `sensor.house_model_gas_hot_water_today` | hot water gas so far today, kWh | `events` (showers today), `yesterday`, `yesterday_reliable` |
 | `sensor.house_model_gas_hob_today` | hob gas so far today, kWh | `events` (hob sessions today), `yesterday`, `yesterday_reliable` |
 | `sensor.house_model_gas_boost_today` | the part of heating gas so far today used while boost was on, kWh | `yesterday`, `yesterday_reliable` |

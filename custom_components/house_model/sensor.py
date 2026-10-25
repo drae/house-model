@@ -81,7 +81,7 @@ class GasSplitSensor(_Base):
     """Gas so far today for one use, from the 30-minute meter slots; boost is the part of heating with boost on."""
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_state_class = SensorStateClass.TOTAL
-    _unrecorded_attributes = frozenset({'yesterday', 'events', 'kw'})
+    _unrecorded_attributes = frozenset({'yesterday', 'events', 'kw', 'days'})
     ICONS = {'heating': 'mdi:radiator', 'hot_water': 'mdi:shower-head', 'hob': 'mdi:pot-steam', 'boost': 'mdi:fire-alert'}
     FIELDS = {'boost': 'boost_heating'}
 
@@ -111,6 +111,7 @@ class GasSplitSensor(_Base):
             today = d.get('split_today') or {}
             attrs['boost'] = round(today.get('boost_heating', 0.0), 2)
             attrs['kw'] = info.get('kw')
+            attrs['days'] = d.get('split_days')
         elif self._use != 'boost':
             kind = 'shower' if self._use == 'hot_water' else 'hob'
             attrs['events'] = [e for e in info.get('events', []) if e['kind'] == kind]
