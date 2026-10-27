@@ -159,3 +159,33 @@ def test_unseen_gas_counts_as_taps():
     slots = split.build_slots(t, t + 1800, [(t, 0.0), (t + 1820, 0.3)], [(t, 'idle', 'none')], [], KW)
     parts = split.split_slot(slots[t], KW)
     assert parts['taps'] == parts['hot_water'] == pytest.approx(0.3) and parts['shower'] == 0
+
+
+def test_kettle_steam_while_heating_is_not_hob_and_the_poached_egg_is():
+    from fixtures_evenings import CLIMATE_26, GAS_26, KITCHEN_26, POWER_26
+    evs = split.events([], [KITCHEN_26], POWER_26, CLIMATE_26)
+    real = [e for e in evs if not e.inferred]
+    assert [(e.kind, e.start, e.end) for e in real] == [('hob', ts('2026-10-26T20:37:39'), ts('2026-10-26T20:40:30'))]
+    slots = split.build_slots(ts('2026-10-26T16:30'), ts('2026-10-26T21:30'), GAS_26, CLIMATE_26, evs, KW)
+    # the 18:55 tea kettle claims nothing
+    assert [split.claimed(slots, e) for e in evs if e.inferred] == [False]
+    day = split.daily(slots, KW, TZ)[dt.date(2026, 10, 26)]
+    assert day['hob'] == pytest.approx(0.088, abs=1e-3)
+    assert day['taps'] == 0
+    assert day['heating'] == pytest.approx(3.54, abs=1e-3)
+
+
+def test_kettle_off_from_the_last_bucket():
+    from fixtures_evenings import POWER_26
+    assert split.kettle_off(POWER_26, ts('2026-10-26T17:10')) == pytest.approx(ts('2026-10-26T17:05:18'), abs=2)
+
+
+def test_poached_egg_without_the_grill_is_still_hob():
+    from fixtures_evenings import CLIMATE_26, KITCHEN_26
+    t = ts('2026-10-26T20:20')
+    # kettle 20:33-20:36 seen on its own, nothing after it
+    power = [(t, 0.32, 0.35), (t + 300, 0.32, 0.35), (t + 600, 1.35, 2.9), (t + 900, 0.84, 2.9),
+             (t + 1200, 0.32, 0.35), (t + 1500, 0.32, 0.35)]
+    assert split.kettles(power) == [(t + 600, t + 1200)]
+    evs = [e for e in split.events([], [KITCHEN_26], power, CLIMATE_26) if e.start > t]
+    assert [(e.kind, e.inferred, e.start) for e in evs] == [('hob', False, ts('2026-10-26T20:37:39'))]

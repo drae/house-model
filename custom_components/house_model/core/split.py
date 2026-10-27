@@ -18,7 +18,8 @@ SHOWER = dict(rise=5, within=300, settle=300, drop=3)
 HOB = dict(rise=6, within=900, settle=300, drop=3)
 HOB_AFTER_SHOWER = 1800  # bathroom steam reaching the kitchen is not cooking
 OVEN_KW = 1.5            # an electric load above this for most of a kitchen event = oven, not hob
-MIN_EVENT = 180          # shortest hob session, and the shortest event rates are learned from
+MIN_EVENT = 180          # shortest event rates are learned from
+MIN_HOB = 120            # shortest kitchen rise taken as a hob session: a kettle-filled pan steams within minutes
 MIN_SHOWER = 60          # brief hot-water draws in a shower room still claim their share of a slot
 TAP_MAX = 300            # a shower-room event shorter than this is a tap (basin fill, hand wash), not a shower
 MAX_KW = {'dhw': 35.0, 'tap': 35.0, 'hob': 3.0}  # evidence above these is something else (a domestic burner tops out ~3 kW)
@@ -30,6 +31,7 @@ KETTLE_BUCKETS = 2
 KETTLE_AFTER_KW = 0.8
 KETTLE_HOB = 1200
 KETTLE_GAS = 0.1  # the slot after the kettle must have its own reading of at least this, unexplained
+KETTLE_STEAM = 300  # a kitchen rise that starts while the kettle boils and peaks this soon after it stops is its steam
 
 # Priors (kW) and their weight in hours of evidence. A tap runs the burner flat out with no mixing down,
 # and a short draw also pays for heating the exchanger and pipes: 25 Oct basin fill 0.647 kWh in 140 s.
@@ -107,6 +109,17 @@ def kettles(power: list[tuple]) -> list[tuple[float, float]]:
     return out
 
 
+def kettle_off(power: list[tuple], end: float) -> float:
+    """When a kettle burst ending in the bucket before `end` switched off, from that bucket's mean."""
+    rows = {p[0]: p for p in power if len(p) > 2 and p[2] is not None}
+    last, nxt = rows.get(end - 300), rows.get(end)
+    if not last:
+        return end
+    base = nxt[1] if nxt else 0.0
+    on = (last[1] - base) / (last[2] - base) if last[2] > base else 1.0
+    return end - 300 + 300 * min(max(on, 0.0), 1.0)
+
+
 def events(showers: list[list], hobs: list[list], power: list[tuple] | None,
            climate: list[tuple[float, str, str]] | None = None) -> list[Event]:
     evs = [e for s in showers for e in detect(s, 'shower', **SHOWER, min_len=MIN_SHOWER)]
@@ -115,9 +128,12 @@ def events(showers: list[list], hobs: list[list], power: list[tuple] | None,
             e.kind = 'tap'
     after_shower = lambda t: any(0 <= t - x.end <= HOB_AFTER_SHOWER or x.start <= t <= x.end
                                  for x in evs if x.kind == 'shower')
+    boils = [(ks, kettle_off(power, ke)) for ks, ke in kettles(power)] if power else []
     for s in hobs:
-        for e in detect(s, 'hob', **HOB):
+        for e in detect(s, 'hob', **HOB, min_len=MIN_HOB):
             if after_shower(e.start):
+                continue
+            if any(ks <= e.start <= off and e.end <= off + KETTLE_STEAM for ks, off in boils):
                 continue
             if power:
                 inside = [p[1] for p in power if e.start - 300 < p[0] < e.end]
@@ -241,6 +257,11 @@ def build_slots(t0: float, t1: float, gas: list[tuple[float, float]], climate: l
             if s and k in single and s.gas >= KETTLE_GAS and s.heat == 0 and s.shower == 0 and s.tap == 0 and s.hob == 0:
                 s.hob = min(e.end, k + SLOT) - max(e.start, k)
     return slots
+
+
+def claimed(slots: dict[float, Slot], e: Event) -> bool:
+    """Whether a kettle cue took gas; one that didn't was tea."""
+    return any(slots[k].hob > 0 for k in range(int(e.start // SLOT) * SLOT, int(e.end), SLOT) if k in slots)
 
 
 def split_slot(s: Slot, kw: dict[str, float]) -> dict[str, float]:

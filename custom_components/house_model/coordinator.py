@@ -185,7 +185,8 @@ class HouseModelCoordinator(DataUpdateCoordinator[dict]):
             self.saved['split'][d.isoformat()] = {k: (round(x, 3) if isinstance(x, float) else x) for k, x in v.items()}
         today_evs = [{'kind': e.kind, 'start': dt.datetime.fromtimestamp(e.start, tz).isoformat(timespec='minutes'),
                       'minutes': round((e.end - e.start) / 60, 1)}
-                     for e in evs if dt.datetime.fromtimestamp(e.start, tz).date() == today]
+                     for e in evs if dt.datetime.fromtimestamp(e.start, tz).date() == today
+                     and (not e.inferred or split.claimed(slots, e))]
         return {'kw': {k: round(v, 2) for k, v in kw.items()}, 'events': today_evs}
 
     def _compute(self, stats: dict, fc: dict, away: dict, hist: dict | None, tz: ZoneInfo, today: dt.date,
