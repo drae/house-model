@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 
 from core import data, gas
-from core.model import Day, Model
+from core.model import Day, Model, _wls
 
 TZ = ZoneInfo('Europe/London')
 
@@ -89,3 +89,27 @@ def test_choose_keeps_current_unless_clearly_beaten():
     assert gas.choose({'ols15': s(2.0), 'bayes': s(1.95)}, 'ols15') == 'ols15'
     assert gas.choose({'ols15': s(2.0), 'bayes': s(1.8)}, 'ols15') == 'bayes'
     assert gas.choose({'ols15': {'mae28': 1.0, 'days28': 3}}, None) == 'bayes'
+
+
+def test_hour_means_need_the_whole_day():
+    # 25 Oct 2026 has 25 local hours: 24 are enough, 23 are not
+    ts = hours(dt.datetime(2026, 10, 25, 0, tzinfo=TZ), 25)
+    full = data.hour_means({t: float(i) for i, t in enumerate(ts)}, TZ)
+    assert full == {dt.date(2026, 10, 25): 12.0}
+    assert data.hour_means({t: 1.0 for t in ts[:24]}, TZ) == {dt.date(2026, 10, 25): 1.0}
+    assert data.hour_means({t: 1.0 for t in ts[:23]}, TZ) == {}
+
+
+def test_base_is_chosen_with_the_prior_penalty():
+    rng = np.random.default_rng(1)
+    t2 = rng.uniform(4, 16, 12)
+    days = [Day(gas=float(1.0 + 3.0 * max(0, 14 - t) + rng.normal(0, 1.5)), t2=float(t)) for t in t2]
+    prior = {'a': (1.5, 0.2), 'b': (6.0, 0.2)}
+    m = Model(fit_base=True, window=None, prior=prior)
+    assert m.fit(days)
+
+    def objective(base):
+        X = np.column_stack([np.ones(len(days)), np.maximum(0.0, base - np.array([d.t2 for d in days]))])
+        return _wls(X, np.array([d.gas for d in days]), np.ones(len(days)), [1.5, 6.0], [0.2, 0.2])[1]
+
+    assert objective(m.base) == min(objective(b) for b in np.arange(10.0, 18.01, 0.5))

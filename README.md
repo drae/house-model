@@ -10,7 +10,7 @@ Every hour it:
 
 1. Reads hourly statistics for gas, outdoor temperature and (optionally) heating time, from 1 September (the start of the heating season).
 2. Fits each candidate model on the days before today.
-3. Forecasts today and every day to the end of the month (at least 10 days) from the weather entity's daily forecast. After the forecast runs out, it uses the last week's mean temperature.
+3. Forecasts today and every day to the end of the month (at least 10 days) from the weather entity's forecast. A day the recorded and hourly forecast hours cover gets their mean, measured like the recorded days. Other days get the daily forecast's (high + low) / 2, and after the forecast runs out, the last week's mean temperature.
 4. Scores every model, keeps the one with the lowest error and exposes the result.
 
 ## Models
@@ -28,7 +28,7 @@ All three are degree-day regressions on the 2-day mean outdoor temperature (the 
 
 ### Scoring
 
-- Each model's forecast for today is saved the first time it is made each day. Once the day is over, it is compared with what the meter recorded.
+- Each model's forecast for today is saved the first time it is made each day from the hourly forecast. Once the day is over, it is compared with what the meter recorded. Without an hourly forecast nothing is saved, since a (high + low) / 2 midpoint is not the daily mean the model is fitted on.
 - Until there are enough saved forecasts, days earlier in the season are scored by refitting on the days before each one and forecasting it with the temperature that was actually recorded.
 - The model with the lowest mean absolute error over the last 28 scored days (at least 14 of them) becomes active. A new model takes over only if it is at least 5% better.
 
@@ -58,7 +58,20 @@ When a slot holds more than one use, its gas is shared in proportion to each one
 - **Late readings:** a reading that books several slots at once is shared by their expected gas. If the activity can't explain it, the day is flagged as lumped.
 - **Reliable days** are the ones the heating-only model fits on. A day counts when it is complete, not lumped, and its slots add up to within 0.5 kWh of the meter's daily total.
 
-The split is rebuilt from the recorder's state history on every refresh, for the last two days. The first run backfills the 10 days the recorder keeps.
+The split is rebuilt from the recorder's state history on every refresh, from the last stored day (at least two days back). The first run backfills the 10 days the recorder keeps.
+
+### Statistics
+
+Gas booked by a late reading changes earlier slots, and the last slot of a day is booked just after midnight, so statistics compiled from the sensors' states would be wrong. Instead the integration writes hourly statistics from the slots, and every rebuild rewrites the hours it covers:
+
+| Statistic | Gas |
+| --- | --- |
+| `house_model:gas_heating` | heating |
+| `house_model:gas_hot_water` | hot water (showers and taps) |
+| `house_model:gas_hob` | hob |
+| `house_model:gas_boost` | the part of heating with boost on |
+
+Each is a kWh `sum`, so it works in the energy dashboard and in statistics graphs. Only hours that have ended are written.
 
 ## Sensors
 
@@ -71,7 +84,7 @@ The split is rebuilt from the recorder's state history on every refresh, for the
 | `sensor.house_model_gas_hob_today` | hob gas so far today, kWh | `events` (hob sessions today), `yesterday`, `yesterday_reliable` |
 | `sensor.house_model_gas_boost_today` | the part of heating gas so far today used while boost was on, kWh | `yesterday`, `yesterday_reliable` |
 
-The split sensors appear when a thermostat and at least one humidity sensor are set. The large attributes are not written to the recorder.
+The split sensors appear when a thermostat and at least one humidity sensor are set. They have no state class: their `statistic_id` attribute names the statistic that holds their history. The large attributes are not written to the recorder.
 
 ## Installation
 
@@ -94,7 +107,7 @@ Go to **Settings > Devices & services > Add integration > House model**, then pi
 | Outdoor temperature fallback | Optional; fills days the main sensor is missing |
 | Heating time today | Optional; hours, counting up and resetting at midnight (e.g. Hive heating time) |
 | Thermostat | Optional; used to spot away days |
-| Weather forecast | A weather entity with a daily forecast |
+| Weather forecast | A weather entity with daily and hourly forecasts |
 | Shower room humidity | Optional, several allowed; turns on the gas split |
 | Kitchen humidity | Optional, several allowed |
 | Electricity power | Optional; whole-house power, to tell an electric oven from the hob |

@@ -197,3 +197,21 @@ def test_poached_egg_without_the_grill_is_still_hob():
     assert split.kettles(power) == [(t + 600, t + 1200)]
     evs = [e for e in split.events([], [KITCHEN_26], power, CLIMATE_26) if e.start > t]
     assert [(e.kind, e.inferred, e.start) for e in evs] == [('hob', False, ts('2026-10-26T20:37:39'))]
+
+
+def test_hourly_statistics_add_up_to_the_days():
+    evs = split.events([BATHROOM_24], [KITCHEN_24], POWER_24, CLIMATE_24)
+    slots = split.build_slots(ts('2026-10-24T16:30'), ts('2026-10-25T00:30'), GAS_24, CLIMATE_24, evs, KW)
+    days = split.daily(slots, KW, TZ)
+    hours = split.hourly(slots, ts('2026-10-25T00:30'))
+    # the 00:00 hour has not ended: left for the next refresh
+    assert max(hours) == ts('2026-10-24T23:00') and ts('2026-10-24T16:00') in hours
+    rows, ends = split.cumulative(hours, {'heating': 100.0}, TZ)
+    d24 = days[dt.date(2026, 10, 24)]
+    assert rows['heating'][-1][1] == pytest.approx(100 + d24['heating'])
+    assert rows['boost_heating'][-1][1] == pytest.approx(d24['boost_heating'])
+    assert rows['hot_water'][-1][1] == pytest.approx(d24['hot_water'])
+    assert ends[dt.date(2026, 10, 24)]['heating'] == pytest.approx(100 + d24['heating'])
+    # the 19:00 slot's boost lands in the 19:00 hour
+    h19 = dict(rows['boost_heating'])
+    assert h19[ts('2026-10-24T19:00')] - h19[ts('2026-10-24T18:00')] == pytest.approx(5.136)

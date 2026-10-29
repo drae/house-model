@@ -20,3 +20,6 @@ KEEP_SPLIT_DAYS = 400
 SPLIT_ATTR_DAYS = 35  # days of split on gas_heating_today's days attribute
 HISTORY_DAYS = 10     # the recorder's default state history; the split backfills this far once
 EVIDENCE_DAYS = 30    # days of clean events pooled into the learned kW rates
+# split use -> (statistic id under the domain, name)
+STAT_IDS = {'heating': ('gas_heating', 'heating gas'), 'hot_water': ('gas_hot_water', 'hot water gas'),
+            'hob': ('gas_hob', 'hob gas'), 'boost_heating': ('gas_boost', 'boost heating gas')}

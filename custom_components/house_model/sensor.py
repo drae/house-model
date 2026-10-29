@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Paul Owen
 """Sensors: today's gas forecast (with the daily forecast list) and the forecast error."""
-import datetime as dt
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.const import UnitOfEnergy
@@ -9,10 +8,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.util import dt as dt_util
 
 from . import HouseModelConfigEntry
-from .const import DOMAIN
+from .const import DOMAIN, STAT_IDS
 from .coordinator import HouseModelCoordinator
 
 
@@ -78,9 +76,12 @@ class GasForecastErrorSensor(_Base):
 
 
 class GasSplitSensor(_Base):
-    """Gas so far today for one use, from the 30-minute meter slots; boost is the part of heating with boost on."""
+    """Gas so far today for one use, from the 30-minute meter slots; boost is the part of heating with boost on.
+
+    No state class: late meter readings change earlier hours, so the integration writes the hourly statistics itself.
+    """
     _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_state_class = SensorStateClass.TOTAL
+    _attr_state_class = None
     _unrecorded_attributes = frozenset({'yesterday', 'events', 'kw', 'days'})
     ICONS = {'heating': 'mdi:radiator', 'hot_water': 'mdi:shower-head', 'hob': 'mdi:pot-steam', 'boost': 'mdi:fire-alert'}
     FIELDS = {'boost': 'boost_heating'}
@@ -97,15 +98,11 @@ class GasSplitSensor(_Base):
         return round(day.get(self._field, 0.0), 2) if day else None
 
     @property
-    def last_reset(self) -> dt.datetime:
-        return dt_util.start_of_local_day()
-
-    @property
     def extra_state_attributes(self):
         d = self.coordinator.data
         y = d.get('split_yesterday') or {}
         attrs = {'yesterday': round(y[self._field], 2) if self._field in y else None,
-                 'yesterday_reliable': y.get('reliable')}
+                 'yesterday_reliable': y.get('reliable'), 'statistic_id': f'{DOMAIN}:{STAT_IDS[self._field][0]}'}
         info = d.get('split_info') or {}
         if self._use == 'heating':
             today = d.get('split_today') or {}

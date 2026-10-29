@@ -37,6 +37,7 @@ KETTLE_STEAM = 300  # a kitchen rise that starts while the kettle boils and peak
 # and a short draw also pays for heating the exchanger and pipes: 25 Oct basin fill 0.647 kWh in 140 s.
 PRIOR_KW = {'heat': (17.0, 1.0), 'dhw': (14.0, 0.25), 'tap': (17.0, 0.1), 'hob': (1.3, 0.3)}
 RATE = {'shower': 'dhw', 'tap': 'tap', 'hob': 'hob'}  # event kind -> rate key
+STAT_USES = ('heating', 'hot_water', 'hob', 'boost_heating')  # uses kept as hourly statistics
 
 
 @dataclass
@@ -128,7 +129,8 @@ def events(showers: list[list], hobs: list[list], power: list[tuple] | None,
             e.kind = 'tap'
     after_shower = lambda t: any(0 <= t - x.end <= HOB_AFTER_SHOWER or x.start <= t <= x.end
                                  for x in evs if x.kind == 'shower')
-    boils = [(ks, kettle_off(power, ke)) for ks, ke in kettles(power)] if power else []
+    bursts = kettles(power) if power else []
+    boils = [(ks, kettle_off(power, ke)) for ks, ke in bursts]
     for s in hobs:
         for e in detect(s, 'hob', **HOB, min_len=MIN_HOB):
             if after_shower(e.start):
@@ -142,7 +144,7 @@ def events(showers: list[list], hobs: list[list], power: list[tuple] | None,
             evs.append(e)
     if power and hobs:
         heat = _intervals([(t, a == 'heating') for t, a, _ in climate], float('-inf'), float('inf')) if climate else []
-        for ks, ke in kettles(power):
+        for ks, ke in bursts:
             if after_shower(ke) or any(ks - 600 <= e.start <= ke + KETTLE_HOB for e in evs if e.kind == 'hob'):
                 continue
             if any(a < ke + KETTLE_HOB and b > ks for a, b in heat):
@@ -337,12 +339,37 @@ def daily(slots: dict[float, Slot], kw: dict[str, float], tz: ZoneInfo) -> dict[
         day = out.setdefault(d, {'heating': 0.0, 'hot_water': 0.0, 'shower': 0.0, 'taps': 0.0, 'hob': 0.0,
                                  'boost_heating': 0.0, 'gas': 0.0, 'lumped': False, 'slots': 0})
         parts = split_slot(s, kw)
+        parts['boost_heating'] = parts['heating'] * s.boost_heat / s.heat if s.heat else 0.0
         s.parts = parts
         for k, v in parts.items():
             day[k] += v
-        if s.heat:
-            day['boost_heating'] += parts['heating'] * s.boost_heat / s.heat
         day['gas'] += s.gas
         day['lumped'] |= s.lumped
         day['slots'] += 1
     return out
+
+
+def hourly(slots: dict[float, Slot], until: float) -> dict[int, dict[str, float]]:
+    """Gas per use and clock hour (UTC start) for hours ending by `until`, from slots split by daily()."""
+    out: dict[int, dict[str, float]] = {}
+    for s in slots.values():
+        h = int(s.start // 3600) * 3600
+        if h + 3600 <= until:
+            row = out.setdefault(h, dict.fromkeys(STAT_USES, 0.0))
+            for k in STAT_USES:
+                row[k] += s.parts.get(k, 0.0)
+    return out
+
+
+def cumulative(hours: dict[int, dict[str, float]], base: dict[str, float],
+               tz: ZoneInfo) -> tuple[dict[str, list[tuple[int, float]]], dict[dt.date, dict[str, float]]]:
+    """Running sums per use from `base`, and each local day's sums at its last hour."""
+    run = {k: base.get(k, 0.0) for k in STAT_USES}
+    rows: dict[str, list[tuple[int, float]]] = {k: [] for k in STAT_USES}
+    ends: dict[dt.date, dict[str, float]] = {}
+    for h in sorted(hours):
+        for k in STAT_USES:
+            run[k] += hours[h][k]
+            rows[k].append((h, run[k]))
+        ends[dt.datetime.fromtimestamp(h, tz).date()] = dict(run)
+    return rows, ends

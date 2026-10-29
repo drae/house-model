@@ -60,3 +60,17 @@ def daily_running_max(rows: list[dict], tz: ZoneInfo) -> dict[dt.date, float]:
         if t.hour:
             out[t.date()] = max(out.get(t.date(), 0.0), r['max'])
     return out
+
+
+def hour_means(hours: dict[float, float], tz: ZoneInfo, missing: int = 1) -> dict[dt.date, float]:
+    """Mean per local day of hourly values (UTC hour start -> value), for days with at most `missing` hours absent."""
+    acc: dict[dt.date, list[float]] = defaultdict(list)
+    for t, v in hours.items():
+        acc[_local(t, tz).date()].append(v)
+    out = {}
+    for d, v in acc.items():
+        start = dt.datetime.combine(d, dt.time(), tz).timestamp()
+        end = dt.datetime.combine(d + dt.timedelta(days=1), dt.time(), tz).timestamp()
+        if len(v) >= round((end - start) / 3600) - missing:
+            out[d] = sum(v) / len(v)
+    return out

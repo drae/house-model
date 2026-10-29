@@ -17,7 +17,8 @@ class Day:
 
 
 def _wls(X, y, w, prior_mean=None, prior_sd=None):
-    """Weighted least squares; a Gaussian prior per coefficient adds ridge rows."""
+    """Weighted least squares; a Gaussian prior per coefficient adds ridge rows. Returns the coefficients and the
+    objective (weighted squared error plus the prior's penalty)."""
     sw = np.sqrt(w)
     A, b = X * sw[:, None], y * sw
     if prior_mean is not None:
@@ -25,7 +26,8 @@ def _wls(X, y, w, prior_mean=None, prior_sd=None):
         A = np.vstack([A, P])
         b = np.concatenate([b, P @ np.asarray(prior_mean, dtype=float)])
     coef, *_ = np.linalg.lstsq(A, b, rcond=None)
-    return coef
+    r = A @ coef - b
+    return coef, float(r @ r)
 
 
 @dataclass
@@ -58,10 +60,9 @@ class Model:
         best = None
         for base in (np.arange(10.0, 18.01, 0.5) if self.fit_base else [self.base]):
             X = np.column_stack([np.ones(len(days)), np.maximum(0.0, base - t2)])
-            c = _wls(X, y, w, pm, ps)
-            sse = float(np.sum(w * (y - X @ c) ** 2))
-            if best is None or sse < best[0]:
-                best = (sse, float(base), c)
+            c, obj = _wls(X, y, w, pm, ps)
+            if best is None or obj < best[0]:
+                best = (obj, float(base), c)
         _, self.base, c = best
         self.a, self.b, self.days = float(c[0]), float(c[1]), len(days)
         return True
