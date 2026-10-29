@@ -291,3 +291,34 @@ async def test_split_statistics_reach_the_recorder(hass: HomeAssistant):
     assert rows['house_model:gas_heating'][-1]['sum'] == pytest.approx(5.492 + 5.136, abs=1e-3)
     assert rows['house_model:gas_hot_water'][-1]['sum'] == pytest.approx(4.019, abs=1e-3)
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_statistics_continue_across_rebuild_windows(hass: HomeAssistant):
+    """A later, shorter rebuild continues the sums from the last day before it and rewrites its hours unchanged."""
+    from fixtures_evenings import BATHROOM_24, CLIMATE_24, GAS_24, KITCHEN_24, POWER_24, TZ, ts
+
+    from custom_components.house_model.coordinator import HouseModelCoordinator
+    entry = MockConfigEntry(domain=DOMAIN, data={**CONF, 'shower_humidity': ['sensor.b'], 'hob_humidity': ['sensor.k']})
+    entry.add_to_hass(hass)
+    c = HouseModelCoordinator(hass, entry)
+
+    def hist(start):
+        gas = [g for g in GAS_24 if g[0] >= start] or GAS_24[-1:]
+        before = [g for g in GAS_24 if g[0] < start]
+        if before:
+            gas = [(start, before[-1][1]), *gas]
+        return {'start': start, 'gas': gas, 'shower': [BATHROOM_24], 'hob': [KITCHEN_24],
+                'climate': CLIMATE_24, 'power': POWER_24}
+
+    def rebuild(start, now):
+        _, rows = c._split(c.saved, hist(start), {}, TZ, dt.date(2026, 10, 25), dt.datetime.fromtimestamp(now, TZ))
+        return {use: dict(r) for use, r in rows.items()}
+
+    full = rebuild(ts('2026-10-24T00:00'), ts('2026-10-25T02:00'))
+    later = rebuild(ts('2026-10-25T00:00'), ts('2026-10-25T02:00'))
+    # the later window holds only 25 Oct, and its hours match the full rebuild's: no step at the join
+    assert min(later['heating']) == ts('2026-10-25T00:00')
+    for use in later:
+        for h, s in later[use].items():
+            assert s == pytest.approx(full[use][h])
+    assert c.saved['sums']['2026-10-24']['heating'] == pytest.approx(5.492 + 5.136, abs=1e-3)
