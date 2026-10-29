@@ -161,6 +161,14 @@ def test_unseen_gas_counts_as_taps():
     assert parts['taps'] == parts['hot_water'] == pytest.approx(0.3) and parts['shower'] == 0
 
 
+def test_tap_during_heating_is_not_heating_evidence():
+    t = ts('2026-10-20T07:00')
+    tap = split.Event('tap', t + 600, t + 740, 6)
+    slots = split.build_slots(t, t + 1800, [(t, 0.0), (t + 1820, 4.0)], [(t, 'heating', 'none')], [tap], KW)
+    assert slots[t].heat > 300 and slots[t].tap > 0
+    assert split.evidence(slots, [tap], TZ) == {}
+
+
 def test_kettle_steam_while_heating_is_not_hob_and_the_poached_egg_is():
     from fixtures_evenings import CLIMATE_26, GAS_26, KITCHEN_26, POWER_26
     evs = split.events([], [KITCHEN_26], POWER_26, CLIMATE_26)

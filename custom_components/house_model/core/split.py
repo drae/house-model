@@ -289,7 +289,7 @@ def evidence(slots: dict[float, Slot], evs: list[Event], tz: ZoneInfo) -> dict[d
         e[key][1] += h
 
     for s in slots.values():
-        if not s.lumped and s.heat >= 300 and s.shower == 0 and s.hob == 0 and s.gas > 0:
+        if not s.lumped and s.heat >= 300 and s.shower == 0 and s.tap == 0 and s.hob == 0 and s.gas > 0:
             add(s.start, 'heat', s.gas, s.heat / 3600)
     for e in evs:
         if e.inferred or e.end - e.start < (MIN_SHOWER if e.kind == 'tap' else MIN_EVENT):

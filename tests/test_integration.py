@@ -155,6 +155,39 @@ async def test_gas_split_on_a_real_evening(hass: HomeAssistant):
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+async def test_no_forecast_issued_without_the_weather(hass: HomeAssistant):
+    await hass.config.async_update(time_zone='Europe/London')
+    entry = MockConfigEntry(domain=DOMAIN, data=CONF)
+    entry.add_to_hass(hass)
+    with patch('custom_components.house_model.coordinator.statistics_during_period', side_effect=synthetic):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    coordinator = entry.runtime_data
+    today = dt_util.now().date().isoformat()
+    # the forecast falls back to recent temperatures, but nothing is issued for scoring
+    assert hass.states.get('sensor.house_model_gas_forecast_today').state not in ('unknown', 'unavailable')
+    assert all(today not in issued for issued in coordinator.saved['issued'].values())
+    assert coordinator._retry_unsub is not None
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert coordinator._retry_unsub is None
+
+
+async def test_history_rebuilds_from_the_last_stored_day(hass: HomeAssistant):
+    from custom_components.house_model.coordinator import HouseModelCoordinator
+    entry = MockConfigEntry(domain=DOMAIN, data=CONF)
+    entry.add_to_hass(hass)
+    c = HouseModelCoordinator(hass, entry)
+    today = dt.date(2026, 10, 29)
+    assert c._history_from(today) == dt.date(2026, 10, 20)
+    c.saved['split'] = {'2026-10-28': {}, '2026-10-29': {}}
+    assert c._history_from(today) == dt.date(2026, 10, 27)
+    c.saved['split'] = {'2026-10-23': {}, '2026-10-24': {}}
+    assert c._history_from(today) == dt.date(2026, 10, 24)
+    c.saved['split'] = {'2026-09-01': {}}
+    assert c._history_from(today) == dt.date(2026, 10, 20)
+
+
 async def test_options_flow_adds_split_sensors(hass: HomeAssistant):
     entry = MockConfigEntry(domain=DOMAIN, data=CONF)
     entry.add_to_hass(hass)

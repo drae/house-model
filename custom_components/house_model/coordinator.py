@@ -119,15 +119,22 @@ class HouseModelCoordinator(DataUpdateCoordinator[dict]):
         away = {dt.date.fromisoformat(k): v for k, v in self.saved['away'].items()}
         hist = None
         if self._split_enabled():
-            back = 2 if self.saved['split'] else HISTORY_DAYS - 1
             hist = await get_instance(self.hass).async_add_executor_job(
-                self._history, dt_util.start_of_local_day(today - dt.timedelta(days=back)))
+                self._history, dt_util.start_of_local_day(self._history_from(today)))
         result = await self.hass.async_add_executor_job(self._compute, stats, fc, away, hist, tz, today, now)
         await self._store.async_save(self.saved)
         return result
 
     def _split_enabled(self) -> bool:
         return bool(self.conf.get(CONF_CLIMATE) and (self.conf.get(CONF_SHOWER_HUMIDITY) or self.conf.get(CONF_HOB_HUMIDITY)))
+
+    def _history_from(self, today: dt.date) -> dt.date:
+        """First day to rebuild: the whole history once, then from the last stored day (after an outage too)."""
+        if not self.saved['split']:
+            return today - dt.timedelta(days=HISTORY_DAYS - 1)
+        last = dt.date.fromisoformat(max(self.saved['split']))
+        back = min(max((today - last).days, 2), HISTORY_DAYS - 1)
+        return today - dt.timedelta(days=back)
 
     def _history(self, start: dt.datetime) -> dict:
         """State history for the gas split (recorder executor)."""
@@ -226,7 +233,8 @@ class HouseModelCoordinator(DataUpdateCoordinator[dict]):
             models[n] = m
             issued = self.saved['issued'].setdefault(n, {})
             t2 = gas.t2_of(recs, today, temps)
-            if m and t2 is not None and today.isoformat() not in issued:
+            # only a real weather forecast is issued: the startup fallback would be scored as one
+            if m and t2 is not None and today in fc and today.isoformat() not in issued:
                 issued[today.isoformat()] = round(m.predict(t2), 3)
             merged = dict(self._proxy.get(n, {}))
             merged.update({dt.date.fromisoformat(d): v for d, v in issued.items()})
