@@ -9,12 +9,12 @@ from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from . import HouseModelConfigEntry
+from . import GasForecastConfigEntry
 from .const import DOMAIN, STAT_IDS
-from .coordinator import HouseModelCoordinator
+from .coordinator import GasForecastCoordinator
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: HouseModelConfigEntry,
+async def async_setup_entry(hass: HomeAssistant, entry: GasForecastConfigEntry,
                             async_add_entities: AddConfigEntryEntitiesCallback) -> None:
     c = entry.runtime_data
     entities = [GasForecastSensor(c), GasForecastErrorSensor(c)]
@@ -23,18 +23,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: HouseModelConfigEntry,
     async_add_entities(entities)
 
 
-class _Base(CoordinatorEntity[HouseModelCoordinator], SensorEntity):
+class _Base(CoordinatorEntity[GasForecastCoordinator], SensorEntity):
     _attr_has_entity_name = True
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 1
 
-    def __init__(self, coordinator: HouseModelCoordinator, key: str) -> None:
+    def __init__(self, coordinator: GasForecastCoordinator, key: str) -> None:
         super().__init__(coordinator)
         entry = coordinator.config_entry
         self._attr_translation_key = key
         self._attr_unique_id = f'{entry.entry_id}_{key}'
-        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, entry.entry_id)}, name='House model',
+        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, entry.entry_id)}, name='Gas forecast',
                                             entry_type=DeviceEntryType.SERVICE)
 
 
@@ -43,8 +43,8 @@ class GasForecastSensor(_Base):
     _attr_icon = 'mdi:fire'
     _unrecorded_attributes = frozenset({'forecast', 'hourly_share', 'coefficients'})
 
-    def __init__(self, coordinator: HouseModelCoordinator) -> None:
-        super().__init__(coordinator, 'gas_forecast_today')
+    def __init__(self, coordinator: GasForecastCoordinator) -> None:
+        super().__init__(coordinator, 'today')
 
     @property
     def native_value(self):
@@ -61,8 +61,8 @@ class GasForecastErrorSensor(_Base):
     _attr_icon = 'mdi:target-variant'
     _unrecorded_attributes = frozenset({'models'})
 
-    def __init__(self, coordinator: HouseModelCoordinator) -> None:
-        super().__init__(coordinator, 'gas_forecast_error')
+    def __init__(self, coordinator: GasForecastCoordinator) -> None:
+        super().__init__(coordinator, 'error')
 
     @property
     def native_value(self):
@@ -86,8 +86,8 @@ class GasSplitSensor(_Base):
     ICONS = {'heating': 'mdi:radiator', 'hot_water': 'mdi:shower-head', 'hob': 'mdi:pot-steam', 'boost': 'mdi:fire-alert'}
     FIELDS = {'boost': 'boost_heating'}
 
-    def __init__(self, coordinator: HouseModelCoordinator, use: str) -> None:
-        super().__init__(coordinator, f'gas_{use}_today')
+    def __init__(self, coordinator: GasForecastCoordinator, use: str) -> None:
+        super().__init__(coordinator, f'{use}_today')
         self._use = use
         self._field = self.FIELDS.get(use, use)
         self._attr_icon = self.ICONS[use]

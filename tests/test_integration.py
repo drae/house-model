@@ -12,7 +12,7 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.house_model.const import DOMAIN
+from custom_components.gas_forecast.const import DOMAIN
 
 CONF = {
     'gas_energy': 'sensor.gas',
@@ -77,8 +77,8 @@ async def _weather(hass: HomeAssistant, hourly: bool = True, skew: float = 0.0):
 async def test_config_flow(hass: HomeAssistant):
     result = await hass.config_entries.flow.async_init(DOMAIN, context={'source': SOURCE_USER})
     assert result['type'] is FlowResultType.FORM
-    with patch('custom_components.house_model.async_setup_entry', return_value=True), \
-            patch('custom_components.house_model.async_unload_entry', return_value=True):
+    with patch('custom_components.gas_forecast.async_setup_entry', return_value=True), \
+            patch('custom_components.gas_forecast.async_unload_entry', return_value=True):
         result = await hass.config_entries.flow.async_configure(result['flow_id'], CONF)
         await hass.async_block_till_done()
         assert result['type'] is FlowResultType.CREATE_ENTRY
@@ -92,13 +92,13 @@ async def test_setup_forecasts_and_scores(hass: HomeAssistant):
     hass.states.async_set('climate.thermostat', 'heat')
     entry = MockConfigEntry(domain=DOMAIN, data=CONF)
     entry.add_to_hass(hass)
-    with patch('custom_components.house_model.coordinator.statistics_during_period', side_effect=synthetic):
+    with patch('custom_components.gas_forecast.coordinator.statistics_during_period', side_effect=synthetic):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
 
     today = dt_util.now().date()
     t2 = (temp_of(today) + temp_of(today - dt.timedelta(days=1))) / 2
-    st = hass.states.get('sensor.house_model_gas_forecast_today')
+    st = hass.states.get('sensor.gas_forecast_today')
     assert st is not None, [s.entity_id for s in hass.states.async_all()]
     # the forecast uses (hi + lo) / 2 = the true mean, so every model should land on the line
     assert float(st.state) == pytest.approx(A + B * max(0.0, BASE - t2), abs=0.3)
@@ -106,7 +106,7 @@ async def test_setup_forecasts_and_scores(hass: HomeAssistant):
     assert st.attributes['hourly_share'][7] == pytest.approx(1.0)
     assert st.attributes['model'] in ('ols15', 'change_point', 'bayes')
 
-    err = hass.states.get('sensor.house_model_gas_forecast_error')
+    err = hass.states.get('sensor.gas_forecast_error')
     assert float(err.state) < 0.5
     assert set(err.attributes['models']) == {'ols15', 'change_point', 'bayes', 'bayes_heating'}
 
@@ -141,29 +141,29 @@ async def test_gas_split_on_a_real_evening(hass: HomeAssistant):
     entry = MockConfigEntry(domain=DOMAIN, data=conf)
     entry.add_to_hass(hass)
     added = []
-    with patch('custom_components.house_model.coordinator.statistics_during_period', side_effect=synthetic), \
-            patch('custom_components.house_model.coordinator.HouseModelCoordinator._history',
+    with patch('custom_components.gas_forecast.coordinator.statistics_during_period', side_effect=synthetic), \
+            patch('custom_components.gas_forecast.coordinator.GasForecastCoordinator._history',
                   side_effect=lambda start: _shifted_evening()), \
-            patch('custom_components.house_model.coordinator.async_add_external_statistics',
+            patch('custom_components.gas_forecast.coordinator.async_add_external_statistics',
                   side_effect=lambda hass, meta, rows: added.append((meta, list(rows)))):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
 
     for use in ('heating', 'hot_water', 'hob', 'boost'):
-        st = hass.states.get(f'sensor.house_model_gas_{use}_today')
+        st = hass.states.get(f'sensor.gas_forecast_{use}_today')
         assert st is not None and st.attributes['device_class'] == 'energy'
         # the integration writes the statistics: the recorder must not compile its own from the state
         assert 'state_class' not in st.attributes and 'last_reset' not in st.attributes
-        assert st.attributes['statistic_id'].startswith('house_model:gas_')
+        assert st.attributes['statistic_id'].startswith('gas_forecast:')
     stats = {meta['statistic_id']: rows for meta, rows in added}
-    assert stats['house_model:gas_heating'][-1]['sum'] == pytest.approx(5.492 + 5.136, abs=1e-3)
-    assert stats['house_model:gas_hot_water'][-1]['sum'] == pytest.approx(4.019, abs=1e-3)
-    assert stats['house_model:gas_boost'][-1]['sum'] == pytest.approx(5.136, abs=1e-3)
-    assert stats['house_model:gas_hob'][-1]['sum'] == 0
-    heat = stats['house_model:gas_heating']
+    assert stats['gas_forecast:heating'][-1]['sum'] == pytest.approx(5.492 + 5.136, abs=1e-3)
+    assert stats['gas_forecast:hot_water'][-1]['sum'] == pytest.approx(4.019, abs=1e-3)
+    assert stats['gas_forecast:boost'][-1]['sum'] == pytest.approx(5.136, abs=1e-3)
+    assert stats['gas_forecast:hob'][-1]['sum'] == 0
+    heat = stats['gas_forecast:heating']
     # whole hours, the last one ended
     assert all(r['start'].minute == 0 for r in heat) and heat[-1]['start'] <= dt_util.utcnow() - dt.timedelta(hours=1)
-    meta = next(m for m, _ in added if m['statistic_id'] == 'house_model:gas_heating')
+    meta = next(m for m, _ in added if m['statistic_id'] == 'gas_forecast:heating')
     assert meta['has_sum'] and meta['source'] == DOMAIN and meta['unit_of_measurement'] == 'kWh'
     sums = entry.runtime_data.saved['sums']
     assert sums[max(sums)]['heating'] == pytest.approx(5.492 + 5.136, abs=1e-3)
@@ -172,10 +172,10 @@ async def test_gas_split_on_a_real_evening(hass: HomeAssistant):
     assert sum(d['heating'] for d in days) == pytest.approx(5.492 + 5.136, abs=1e-3)
     assert sum(d['hob'] for d in days) == 0
     assert sum(d['boost_heating'] for d in days) == pytest.approx(5.136, abs=1e-3)
-    split_days = hass.states.get('sensor.house_model_gas_heating_today').attributes['days']
+    split_days = hass.states.get('sensor.gas_forecast_heating_today').attributes['days']
     assert sum(v['hot_water'] for v in split_days.values()) == pytest.approx(4.019, abs=1e-3)
     assert sum(v['boost'] for v in split_days.values()) == pytest.approx(5.136, abs=1e-3)
-    kw = hass.states.get('sensor.house_model_gas_heating_today').attributes['kw']
+    kw = hass.states.get('sensor.gas_forecast_heating_today').attributes['kw']
     assert 14 < kw['dhw'] < 15 and 17 < kw['heat'] < 18
     assert await hass.config_entries.async_unload(entry.entry_id)
 
@@ -184,14 +184,14 @@ async def test_no_forecast_issued_without_the_weather(hass: HomeAssistant):
     await hass.config.async_update(time_zone='Europe/London')
     entry = MockConfigEntry(domain=DOMAIN, data=CONF)
     entry.add_to_hass(hass)
-    with patch('custom_components.house_model.coordinator.statistics_during_period', side_effect=synthetic):
+    with patch('custom_components.gas_forecast.coordinator.statistics_during_period', side_effect=synthetic):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
 
     coordinator = entry.runtime_data
     today = dt_util.now().date().isoformat()
     # the forecast falls back to recent temperatures, but nothing is issued for scoring
-    assert hass.states.get('sensor.house_model_gas_forecast_today').state not in ('unknown', 'unavailable')
+    assert hass.states.get('sensor.gas_forecast_today').state not in ('unknown', 'unavailable')
     assert all(today not in issued for issued in coordinator.saved['issued'].values())
     assert coordinator._retry_unsub is not None
     assert await hass.config_entries.async_unload(entry.entry_id)
@@ -204,7 +204,7 @@ async def test_issued_forecast_is_the_hourly_mean(hass: HomeAssistant):
     await _weather(hass, skew=2.0)
     entry = MockConfigEntry(domain=DOMAIN, data=CONF)
     entry.add_to_hass(hass)
-    with patch('custom_components.house_model.coordinator.statistics_during_period', side_effect=synthetic):
+    with patch('custom_components.gas_forecast.coordinator.statistics_during_period', side_effect=synthetic):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
 
@@ -213,7 +213,7 @@ async def test_issued_forecast_is_the_hourly_mean(hass: HomeAssistant):
     t2 = (temp_of(today) + temp_of(today - dt.timedelta(days=1))) / 2
     m = c.saved['active']
     assert c.saved['issued'][m][today.isoformat()] == pytest.approx(A + B * max(0.0, BASE - t2), abs=0.3)
-    st = hass.states.get('sensor.house_model_gas_forecast_today')
+    st = hass.states.get('sensor.gas_forecast_today')
     assert float(st.state) == pytest.approx(A + B * max(0.0, BASE - t2), abs=0.3)
     assert c._retry_unsub is None
     assert await hass.config_entries.async_unload(entry.entry_id)
@@ -224,22 +224,22 @@ async def test_no_forecast_issued_without_the_hourly_forecast(hass: HomeAssistan
     await _weather(hass, hourly=False)
     entry = MockConfigEntry(domain=DOMAIN, data=CONF)
     entry.add_to_hass(hass)
-    with patch('custom_components.house_model.coordinator.statistics_during_period', side_effect=synthetic):
+    with patch('custom_components.gas_forecast.coordinator.statistics_during_period', side_effect=synthetic):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
 
     c = entry.runtime_data
     today = dt_util.now().date().isoformat()
     assert all(today not in issued for issued in c.saved['issued'].values())
-    assert hass.states.get('sensor.house_model_gas_forecast_today').state not in ('unknown', 'unavailable')
+    assert hass.states.get('sensor.gas_forecast_today').state not in ('unknown', 'unavailable')
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 async def test_history_rebuilds_from_the_last_stored_day(hass: HomeAssistant):
-    from custom_components.house_model.coordinator import HouseModelCoordinator
+    from custom_components.gas_forecast.coordinator import GasForecastCoordinator
     entry = MockConfigEntry(domain=DOMAIN, data=CONF)
     entry.add_to_hass(hass)
-    c = HouseModelCoordinator(hass, entry)
+    c = GasForecastCoordinator(hass, entry)
     today = dt.date(2026, 10, 29)
     assert c._history_from(today) == dt.date(2026, 10, 20)
     c.saved['split'] = {'2026-10-28': {}, '2026-10-29': {}}
@@ -256,8 +256,8 @@ async def test_history_rebuilds_from_the_last_stored_day(hass: HomeAssistant):
 async def test_options_flow_adds_split_sensors(hass: HomeAssistant):
     entry = MockConfigEntry(domain=DOMAIN, data=CONF)
     entry.add_to_hass(hass)
-    with patch('custom_components.house_model.async_setup_entry', return_value=True), \
-            patch('custom_components.house_model.async_unload_entry', return_value=True):
+    with patch('custom_components.gas_forecast.async_setup_entry', return_value=True), \
+            patch('custom_components.gas_forecast.async_unload_entry', return_value=True):
         result = await hass.config_entries.options.async_init(entry.entry_id)
         assert result['type'] is FlowResultType.FORM
         result = await hass.config_entries.options.async_configure(
@@ -278,18 +278,18 @@ async def test_split_statistics_reach_the_recorder(hass: HomeAssistant):
             'electricity_power': 'sensor.power'}
     entry = MockConfigEntry(domain=DOMAIN, data=conf)
     entry.add_to_hass(hass)
-    with patch('custom_components.house_model.coordinator.statistics_during_period', side_effect=synthetic), \
-            patch('custom_components.house_model.coordinator.HouseModelCoordinator._history',
+    with patch('custom_components.gas_forecast.coordinator.statistics_during_period', side_effect=synthetic), \
+            patch('custom_components.gas_forecast.coordinator.GasForecastCoordinator._history',
                   side_effect=lambda start: _shifted_evening()):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
         await async_wait_recording_done(hass)
 
-    ids = {'house_model:gas_heating', 'house_model:gas_hot_water'}
+    ids = {'gas_forecast:heating', 'gas_forecast:hot_water'}
     rows = await hass.async_add_executor_job(real_stats, hass, dt_util.utcnow() - dt.timedelta(days=1), None, ids,
                                              'hour', None, {'sum'})
-    assert rows['house_model:gas_heating'][-1]['sum'] == pytest.approx(5.492 + 5.136, abs=1e-3)
-    assert rows['house_model:gas_hot_water'][-1]['sum'] == pytest.approx(4.019, abs=1e-3)
+    assert rows['gas_forecast:heating'][-1]['sum'] == pytest.approx(5.492 + 5.136, abs=1e-3)
+    assert rows['gas_forecast:hot_water'][-1]['sum'] == pytest.approx(4.019, abs=1e-3)
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
@@ -297,10 +297,10 @@ async def test_statistics_continue_across_rebuild_windows(hass: HomeAssistant):
     """A later, shorter rebuild continues the sums from the last day before it and rewrites its hours unchanged."""
     from fixtures_evenings import BATHROOM_24, CLIMATE_24, GAS_24, KITCHEN_24, POWER_24, TZ, ts
 
-    from custom_components.house_model.coordinator import HouseModelCoordinator
+    from custom_components.gas_forecast.coordinator import GasForecastCoordinator
     entry = MockConfigEntry(domain=DOMAIN, data={**CONF, 'shower_humidity': ['sensor.b'], 'hob_humidity': ['sensor.k']})
     entry.add_to_hass(hass)
-    c = HouseModelCoordinator(hass, entry)
+    c = GasForecastCoordinator(hass, entry)
 
     def hist(start):
         gas = [g for g in GAS_24 if g[0] >= start] or GAS_24[-1:]

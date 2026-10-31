@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Paul Owen
-"""Constants for House model."""
-DOMAIN = 'house_model'
+"""Constants for Gas forecast."""
+DOMAIN = 'gas_forecast'
 
 CONF_GAS = 'gas_energy'
 CONF_OUTDOOR = 'outdoor_temperature'
@@ -17,9 +17,9 @@ STORE_VERSION = 1
 KEEP_ISSUED_DAYS = 120
 KEEP_AWAY_DAYS = 400
 KEEP_SPLIT_DAYS = 400
-SPLIT_ATTR_DAYS = 35  # days of split on gas_heating_today's days attribute
+SPLIT_ATTR_DAYS = 35  # days of split on heating_today's days attribute
 HISTORY_DAYS = 10     # the recorder's default state history; the split backfills this far once
 EVIDENCE_DAYS = 30    # days of clean events pooled into the learned kW rates
 # split use -> (statistic id under the domain, name)
-STAT_IDS = {'heating': ('gas_heating', 'heating gas'), 'hot_water': ('gas_hot_water', 'hot water gas'),
-            'hob': ('gas_hob', 'hob gas'), 'boost_heating': ('gas_boost', 'boost heating gas')}
+STAT_IDS = {'heating': ('heating', 'Heating gas'), 'hot_water': ('hot_water', 'Hot water gas'),
+            'hob': ('hob', 'Hob gas'), 'boost_heating': ('boost', 'Boost heating gas')}

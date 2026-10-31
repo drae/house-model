@@ -1,11 +1,11 @@
 {
   "config": {
     "abort": {
-      "single_instance_allowed": "House model is already set up."
+      "single_instance_allowed": "Gas forecast is already set up."
     },
     "step": {
       "user": {
-        "title": "House model",
+        "title": "Gas forecast",
         "description": "Pick the sensors the gas forecast learns from.",
         "data": {
           "gas_energy": "Gas energy (kWh, cumulative)",
@@ -31,30 +31,30 @@
   },
   "entity": {
     "sensor": {
-      "gas_forecast_today": {
-        "name": "Gas forecast today"
+      "today": {
+        "name": "Today"
       },
-      "gas_forecast_error": {
-        "name": "Gas forecast error"
+      "error": {
+        "name": "Error"
       },
-      "gas_heating_today": {
-        "name": "Gas heating today"
+      "heating_today": {
+        "name": "Heating today"
       },
-      "gas_hot_water_today": {
-        "name": "Gas hot water today"
+      "hot_water_today": {
+        "name": "Hot water today"
       },
-      "gas_hob_today": {
-        "name": "Gas hob today"
+      "hob_today": {
+        "name": "Hob today"
       },
-      "gas_boost_today": {
-        "name": "Gas boost today"
+      "boost_today": {
+        "name": "Boost today"
       }
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "House model",
+        "title": "Gas forecast",
         "description": "Pick the sensors the gas forecast learns from.",
         "data": {
           "gas_energy": "Gas energy (kWh, cumulative)",

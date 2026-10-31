@@ -29,7 +29,7 @@ FORECAST_DAYS = 10
 WORK = ('issued', 'split', 'evidence', 'sums', 'active')  # saved state the refit changes, on a copy in the executor
 
 
-class HouseModelCoordinator(DataUpdateCoordinator[dict]):
+class GasForecastCoordinator(DataUpdateCoordinator[dict]):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         super().__init__(hass, _LOGGER, name=DOMAIN, update_interval=dt.timedelta(hours=1), config_entry=entry)
         self.conf = {**entry.data, **entry.options}
@@ -172,7 +172,7 @@ class HouseModelCoordinator(DataUpdateCoordinator[dict]):
         for use, series in (rows or {}).items():
             if not series:
                 continue
-            meta = StatisticMetaData(mean_type=StatisticMeanType.NONE, has_sum=True, name=f'House model {STAT_IDS[use][1]}',
+            meta = StatisticMetaData(mean_type=StatisticMeanType.NONE, has_sum=True, name=STAT_IDS[use][1],
                                      source=DOMAIN, statistic_id=f'{DOMAIN}:{STAT_IDS[use][0]}',
                                      unit_class=EnergyConverter.UNIT_CLASS, unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR)
             async_add_external_statistics(self.hass, meta, [StatisticData(start=dt_util.utc_from_timestamp(h), sum=s)

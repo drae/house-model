@@ -4,4 +4,4 @@ import pathlib
 import sys
 
 # Import `core` on its own: the integration package needs Home Assistant
-sys.path.insert(0, str(pathlib.Path(__file__).parents[1] / 'custom_components' / 'house_model'))
+sys.path.insert(0, str(pathlib.Path(__file__).parents[1] / 'custom_components' / 'gas_forecast'))

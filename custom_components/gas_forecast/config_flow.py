@@ -28,21 +28,21 @@ SCHEMA = vol.Schema({
 })
 
 
-class HouseModelConfigFlow(ConfigFlow, domain=DOMAIN):
+class GasForecastConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
     async def async_step_user(self, user_input=None) -> ConfigFlowResult:
         if user_input is not None:
-            return self.async_create_entry(title='House model', data=user_input)
+            return self.async_create_entry(title='Gas forecast', data=user_input)
         return self.async_show_form(step_id='user', data_schema=SCHEMA)
 
     @staticmethod
     @callback
     def async_get_options_flow(entry: ConfigEntry) -> OptionsFlow:
-        return HouseModelOptionsFlow()
+        return GasForecastOptionsFlow()
 
 
-class HouseModelOptionsFlow(OptionsFlow):
+class GasForecastOptionsFlow(OptionsFlow):
     """Every sensor can be changed later; the integration reloads with the new set."""
 
     async def async_step_init(self, user_input=None) -> ConfigFlowResult:

@@ -1,4 +1,4 @@
-# House model
+# Gas forecast
 
 A Home Assistant integration that learns how much gas the house uses for the weather, forecasts it, keeps score of its own forecasts, and splits the gas into heating, hot water and hob.
 
@@ -66,10 +66,10 @@ Gas booked by a late reading changes earlier slots, and the last slot of a day i
 
 | Statistic | Gas |
 | --- | --- |
-| `house_model:gas_heating` | heating |
-| `house_model:gas_hot_water` | hot water (showers and taps) |
-| `house_model:gas_hob` | hob |
-| `house_model:gas_boost` | the part of heating with boost on |
+| `gas_forecast:heating` | heating |
+| `gas_forecast:hot_water` | hot water (showers and taps) |
+| `gas_forecast:hob` | hob |
+| `gas_forecast:boost` | the part of heating with boost on |
 
 Each is a kWh `sum`, so it works in the energy dashboard and in statistics graphs. Only hours that have ended are written.
 
@@ -77,12 +77,12 @@ Each is a kWh `sum`, so it works in the energy dashboard and in statistics graph
 
 | Entity | State | Attributes |
 | --- | --- | --- |
-| `sensor.house_model_gas_forecast_today` | whole-day gas forecast for today, kWh | `forecast` (list of `date`, `kwh`, `weather`: `forecast` or `recent`), `hourly_share` (share of a day's gas in each hour over the last 14 days), `model`, `coefficients` |
-| `sensor.house_model_gas_forecast_error` | the active model's mean absolute error over the last 28 days, kWh/day | `model`, `models` (each model's 14- and 28-day error and day counts) |
-| `sensor.house_model_gas_heating_today` | heating gas so far today, kWh | `boost` (heating gas while boost was on), `kw` (learned rates), `days` (the split for each of the last 35 days: `heating`, `hot_water`, `taps` (part of `hot_water`), `hob`, `boost`, `gas`, `reliable`), `yesterday`, `yesterday_reliable` |
-| `sensor.house_model_gas_hot_water_today` | hot water gas so far today, kWh | `shower` and `taps` (its two parts), `events` (showers and taps today), `yesterday`, `yesterday_reliable` |
-| `sensor.house_model_gas_hob_today` | hob gas so far today, kWh | `events` (hob sessions today), `yesterday`, `yesterday_reliable` |
-| `sensor.house_model_gas_boost_today` | the part of heating gas so far today used while boost was on, kWh | `yesterday`, `yesterday_reliable` |
+| `sensor.gas_forecast_today` | whole-day gas forecast for today, kWh | `forecast` (list of `date`, `kwh`, `weather`: `forecast` or `recent`), `hourly_share` (share of a day's gas in each hour over the last 14 days), `model`, `coefficients` |
+| `sensor.gas_forecast_error` | the active model's mean absolute error over the last 28 days, kWh/day | `model`, `models` (each model's 14- and 28-day error and day counts) |
+| `sensor.gas_forecast_heating_today` | heating gas so far today, kWh | `boost` (heating gas while boost was on), `kw` (learned rates), `days` (the split for each of the last 35 days: `heating`, `hot_water`, `taps` (part of `hot_water`), `hob`, `boost`, `gas`, `reliable`), `yesterday`, `yesterday_reliable` |
+| `sensor.gas_forecast_hot_water_today` | hot water gas so far today, kWh | `shower` and `taps` (its two parts), `events` (showers and taps today), `yesterday`, `yesterday_reliable` |
+| `sensor.gas_forecast_hob_today` | hob gas so far today, kWh | `events` (hob sessions today), `yesterday`, `yesterday_reliable` |
+| `sensor.gas_forecast_boost_today` | the part of heating gas so far today used while boost was on, kWh | `yesterday`, `yesterday_reliable` |
 
 The split sensors appear when a thermostat and at least one humidity sensor are set. They have no state class: their `statistic_id` attribute names the statistic that holds their history. The large attributes are not written to the recorder.
 
@@ -94,11 +94,11 @@ Add this repository as a custom repository of type **Integration**, download it,
 
 ### Manual
 
-Copy `custom_components/house_model` to `/config/custom_components/` and restart Home Assistant.
+Copy `custom_components/gas_forecast` to `/config/custom_components/` and restart Home Assistant.
 
 ### Setup
 
-Go to **Settings > Devices & services > Add integration > House model**, then pick:
+Go to **Settings > Devices & services > Add integration > Gas forecast**, then pick:
 
 | Field | Notes |
 | --- | --- |
@@ -116,7 +116,7 @@ All of these can be changed later under **Configure**.
 
 ## Development
 
-The model code in `custom_components/house_model/core` only needs numpy, so it can be tested without Home Assistant.
+The model code in `custom_components/gas_forecast/core` only needs numpy, so it can be tested without Home Assistant.
 
 ```sh
 uv venv -p 3.14 .venv
